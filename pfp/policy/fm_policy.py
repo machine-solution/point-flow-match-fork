@@ -264,8 +264,10 @@ class FMPolicy(ComposerModel, BasePolicy):
         cfg.model.subs_factor = subs_factor
         assert cfg.model._target_.split(".")[-1] == cls.__name__
         model: FMPolicy = hydra.utils.instantiate(cfg.model)
-        model.load_state_dict(state_dict["state"]["model"])
+        model.load_state_dict(state_dict["state"]["model"], strict=False)
         model.to(DEVICE)
+        # Ensure model is in float32 (model.to() should handle this, but ensure it)
+        model = model.float()
         model.eval()
         if flow_schedule is not None:
             model.set_flow_schedule(flow_schedule, exp_scale)

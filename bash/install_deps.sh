@@ -3,9 +3,12 @@ if ! [[ -n "${CONDA_PREFIX}" ]]; then
     exit 1
 fi
 
-pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu121
+# Install setuptools first to provide distutils (required for some packages)
+pip install --upgrade setuptools wheel
+
+pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2
 pip install fvcore iopath
-pip install --no-index --no-cache-dir pytorch3d==0.7.5 -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt212/download.html
+pip install --no-cache-dir pytorch3d
 # Or if on cpu: 
 # pip3 install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu
 pip install -e .

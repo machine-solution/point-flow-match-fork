@@ -8,3 +8,5 @@
 **/toy_circle/results/**
 *plot.png
 *.svg
+
+/venv
