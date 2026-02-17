@@ -109,7 +109,7 @@ class RLBenchEnv(BaseEnv):
             return 0.0, True
         try:
             _, reward, terminate = self.task.step(action)
-        except IKError and InvalidActionError as e:
+        except (IKError, InvalidActionError) as e:
             print(e)
             cur_position = self.last_obs.gripper_pose[:3]
             des_position = action[:3]
@@ -124,6 +124,14 @@ class RLBenchEnv(BaseEnv):
 
             new_action = np.concatenate([new_position, new_quat, action[-1:]])
             reward, terminate = self._step_safe(new_action, recursion_depth + 1)
+        except RuntimeError as e:
+            # Handle CoppeliaSim/V-REP errors
+            if "V-REP" in str(e) or "call failed" in str(e).lower() or "Return value: -1" in str(e):
+                print(f"Warning: CoppeliaSim error: {e}")
+                print("Returning terminate=True to skip this step")
+                return 0.0, True
+            else:
+                raise
         return reward, terminate
 
     def get_obs(self) -> tuple[np.ndarray, ...]:
