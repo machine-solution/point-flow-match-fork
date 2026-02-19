@@ -117,6 +117,8 @@ demos/sim/open_fridge/valid
 
 Из корня `PointFlowMatch`. В sbatch-скрипте уже прописан `PYTHONPATH` на соседний `diffusion_policy`, при ручном запуске его нужно выставить самому (см. проверку выше).
 
+На Dexter в sbatch используется системный conda: `source /opt/miniconda3/etc/profile.d/conda.sh` (как в примере из инструкции кластера).
+
 ```bash
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env

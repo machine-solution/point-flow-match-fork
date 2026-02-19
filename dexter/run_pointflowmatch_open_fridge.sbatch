@@ -18,12 +18,14 @@
 # After training, they are also copied to CKPT_BACKUP_DIR (see below).
 
 #SBATCH --job-name=pfm_open_fridge
+#SBATCH --output=logs/pfm_open_fridge_%j.out
+#SBATCH --error=logs/pfm_open_fridge_%j.err
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
-#SBATCH --output=logs/pfm_open_fridge_%j.out
-#SBATCH --error=logs/pfm_open_fridge_%j.err
 
 set -e
 
@@ -43,14 +45,8 @@ echo "Job ID      : ${SLURM_JOB_ID}"
 echo "Node        : $(hostname)"
 echo "GPUs        : ${SLURM_GPUS:-1}"
 
-# ── Conda ────────────────────────────────────────────────────────────────────
-if [ -f "${HOME}/miniconda3/etc/profile.d/conda.sh" ]; then
-    source "${HOME}/miniconda3/etc/profile.d/conda.sh"
-elif [ -f "${HOME}/anaconda3/etc/profile.d/conda.sh" ]; then
-    source "${HOME}/anaconda3/etc/profile.d/conda.sh"
-else
-    echo "ERROR: conda.sh not found"; exit 1
-fi
+# Conda на Dexter: системный путь (как в инструкции кластера)
+source /opt/miniconda3/etc/profile.d/conda.sh
 conda activate ./pfp-train-env
 echo "Python: $(which python) ($(python -V 2>&1))"
 
