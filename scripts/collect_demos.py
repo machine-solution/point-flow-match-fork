@@ -1,12 +1,35 @@
+import os
+import sys
+
+# Add diffusion_policy to path if not already there (same as evaluate.py, record_actions.py)
+_diffusion_policy_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "diffusion_policy")
+if os.path.exists(_diffusion_policy_path) and _diffusion_policy_path not in sys.path:
+    sys.path.insert(0, _diffusion_policy_path)
+
 import hydra
 import numpy as np
 from tqdm import tqdm
 from omegaconf import OmegaConf
 from rlbench.backend.observation import Observation
+from rlbench.backend import waypoints as _rlbench_waypoints
+
+# When planner returns -1 PyRep raises RuntimeError; RLBench only catches ConfigurationPathError.
+# Treat -1 as infeasible so built-in retry (40 placements × 10 demo attempts) runs.
+_orig_point_get_path = _rlbench_waypoints.Point.get_path
+def _point_get_path_infeasible_on_neg1(self, ignore_collisions=False):
+    try:
+        return _orig_point_get_path(self, ignore_collisions)
+    except RuntimeError as e:
+        if "Return value: -1" in str(e) or "V-REP" in str(e):
+            return None
+        raise
+_rlbench_waypoints.Point.get_path = _point_get_path_infeasible_on_neg1
+
 from pfp import DATA_DIRS, set_seeds
 from pfp.envs.rlbench_env import RLBenchEnv
 from pfp.data.replay_buffer import RobotReplayBuffer
 from pfp.common.visualization import RerunViewer as RV
+from rlbench.backend.exceptions import TaskEnvironmentError
 
 
 # For valid, call it with: --config-name=collect_demos_valid
@@ -31,7 +54,16 @@ def main(cfg: OmegaConf):
 
     for _ in tqdm(range(cfg.num_episodes)):
         data_history = list()
-        demo = env.task.get_demos(1, live_demos=True)[0]
+        # RLBench's max_attempts only retries on get_demo() failure; reset() failure is outside that try.
+        # So retry here when placement is infeasible (TaskEnvironmentError).
+        for _ in range(500):
+            try:
+                demo = env.task.get_demos(1, live_demos=True, max_attempts=10)[0]
+                break
+            except TaskEnvironmentError:
+                continue
+        else:
+            raise RuntimeError("Could not get a feasible demo after 500 attempts.")
         observations: list[Observation] = demo._observations
         for obs in observations:
             robot_state = env.get_robot_state(obs)

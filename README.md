@@ -115,7 +115,37 @@ During playback CoppeliaSim runs with a visible window (`headless=False`, `vis=T
 
 ## Training
 
-To train your own policies instead of using the pretrained checkpoints, you first need to collect demonstrations:
+To train your own policies instead of using the pretrained checkpoints, you first need to collect demonstrations.
+
+### CoppeliaSim version for data collection (RLBench)
+
+**For `collect_demos.py` you must use CoppeliaSim 4.1.0.** Newer versions (e.g. 4.10) cause `RuntimeError: Handle Panda does not exist` because the RLBench scene `task_design.ttt` was made for 4.1.
+
+- Download: [CoppeliaSim Edu V4.1.0 Ubuntu 20.04](https://downloads.coppeliarobotics.com/V4_1_0/CoppeliaSim_Edu_V4_1_0_Ubuntu20_04.tar.xz) (works on Ubuntu 22.04).
+- Extract to a folder. If you extract the archive **inside this repo**, the script `bash/collect_data_open_fridge.sh` will use it automatically (it expects `CoppeliaSim_Edu_V4_1_0_Ubuntu20_04` in the repo root). Otherwise set `COPPELIASIM_ROOT` (and `LD_LIBRARY_PATH`, `QT_QPA_PLATFORM_PLUGIN_PATH`) to the extracted folder.
+
+
+For headless runs, install xvfb; the planner does not always find a path—RLBench retries automatically.
+
+```bash
+sudo apt-get install xvfb
+```
+
+Then collect demos for open_fridge:
+
+```bash
+# Using the helper script (uses CoppeliaSim 4.1.0 from repo if present)
+xvfb-run -a bash bash/collect_data_open_fridge.sh
+```
+
+Or manually (set `COPPELIASIM_ROOT` first if CoppeliaSim is not in the repo):
+
+```bash
+xvfb-run -a python scripts/collect_demos.py --config-name=collect_demos_train save_data=True env_config.vis=False env_config.task_name=open_fridge env_config.headless=True
+xvfb-run -a python scripts/collect_demos.py --config-name=collect_demos_valid save_data=True env_config.vis=False env_config.task_name=open_fridge env_config.headless=True
+```
+
+Output is written to `demos/sim/open_fridge/train` and `demos/sim/open_fridge/valid`. To collect all tasks as in the paper, use:
 
 ```bash
 bash bash/collect_data.sh
