@@ -68,10 +68,12 @@ fi
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
 echo "=== Starting training ==="
+# Уменьшенный batch_size (64) чтобы избежать CUDA OOM при 1 GPU; при необходимости понизь до 32
 python scripts/train.py \
     task_name=open_fridge \
     +experiment=pointflowmatch \
     dataloader.num_workers=8 \
+    dataloader.batch_size=64 \
     log_wandb=False
 
 echo "=== Training finished ==="

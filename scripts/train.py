@@ -10,6 +10,7 @@ from composer.loggers import WandBLogger
 from composer.callbacks import LRMonitor
 from composer.models import ComposerModel
 from composer.algorithms import EMA
+from composer.core import Callback, Event
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from pfp import DEVICE, DATA_DIRS, set_seeds
 from pfp.data.dataset_pcd import RobotDatasetPcd
@@ -18,6 +19,37 @@ from pfp.data.dataset_images import RobotDatasetImages
 
 def _tensor_size_mb(t: torch.Tensor) -> float:
     return t.numel() * t.element_size() / (1024 ** 2)
+
+
+def _log_gpu_memory(tag: str):
+    if not torch.cuda.is_available():
+        return
+    alloc = torch.cuda.memory_allocated(0) / 1024 ** 2
+    reserved = torch.cuda.memory_reserved(0) / 1024 ** 2
+    max_alloc = torch.cuda.max_memory_allocated(0) / 1024 ** 2
+    print(f"[memory] {tag}: allocated={alloc:.1f} MB  reserved={reserved:.1f} MB  max_allocated={max_alloc:.1f} MB")
+
+
+class MemoryProfileCallback(Callback):
+    """Логирует GPU память в ключевых точках начала обучения (первые батчи)."""
+
+    def __init__(self, log_first_n_batches: int = 3):
+        self.log_first_n_batches = log_first_n_batches
+
+    def run_event(self, event: Event, state, logger):
+        if not torch.cuda.is_available():
+            return
+        batch = getattr(state.timestamp, "batch", 0) if state.timestamp else 0
+        if event == Event.INIT:
+            _log_gpu_memory("INIT (model on device)")
+        elif event == Event.FIT_START:
+            _log_gpu_memory("FIT_START")
+        elif event == Event.BATCH_START and batch < self.log_first_n_batches:
+            _log_gpu_memory(f"BATCH_START batch={batch}")
+        elif event == Event.AFTER_FORWARD and batch == 0:
+            _log_gpu_memory("AFTER_FORWARD batch=0 (activations in memory)")
+        elif event == Event.AFTER_BACKWARD and batch == 0:
+            _log_gpu_memory("AFTER_BACKWARD batch=0 (after grad computation)")
 
 
 def _log_memory_usage(cfg: OmegaConf, composer_model: ComposerModel, optimizer, dataloader_train):
@@ -108,6 +140,11 @@ def main(cfg: OmegaConf):
 
     _log_memory_usage(cfg, composer_model, optimizer, dataloader_train)
 
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        print("[memory] Before Trainer(): cache emptied, peak stats reset")
+
     wandb_logger = WandBLogger(
         project="pfp-train-fixed",
         entity="rl-lab-chisari",
@@ -127,7 +164,7 @@ def main(cfg: OmegaConf):
         step_schedulers_every_batch=True,
         device="gpu" if DEVICE.type == "cuda" else "cpu",
         loggers=[wandb_logger],
-        callbacks=[LRMonitor()],
+        callbacks=[LRMonitor(), MemoryProfileCallback(log_first_n_batches=3)],
         save_folder="ckpt/{run_name}",
         save_interval=f"{cfg.save_each_n_epochs}ep",
         save_num_checkpoints_to_keep=3,
