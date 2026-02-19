@@ -2,6 +2,7 @@ import os
 import hydra
 import wandb
 import subprocess
+import torch
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 from composer.trainer import Trainer
@@ -13,6 +14,54 @@ from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from pfp import DEVICE, DATA_DIRS, set_seeds
 from pfp.data.dataset_pcd import RobotDatasetPcd
 from pfp.data.dataset_images import RobotDatasetImages
+
+
+def _tensor_size_mb(t: torch.Tensor) -> float:
+    return t.numel() * t.element_size() / (1024 ** 2)
+
+
+def _log_memory_usage(cfg: OmegaConf, composer_model: ComposerModel, optimizer, dataloader_train):
+    """Log model size, optimizer/EMA footprint, and first batch sizes for memory debugging."""
+    n_params = sum(p.numel() for p in composer_model.parameters())
+    n_trainable = sum(p.numel() for p in composer_model.parameters() if p.requires_grad)
+    model_mb = n_params * 4 / (1024 ** 2)  # fp32
+    print("[memory] === Model ===")
+    print(f"[memory] Parameters: {n_params:,} (trainable {n_trainable:,})")
+    print(f"[memory] Model weights (fp32): {model_mb:.2f} MB")
+
+    # AdamW: 2 states (exp_avg, exp_avg_sq) per param, same dtype as param
+    optimizer_mb = 2 * n_trainable * 4 / (1024 ** 2)
+    print(f"[memory] Optimizer states (AdamW, fp32): ~{optimizer_mb:.2f} MB")
+
+    if cfg.use_ema:
+        ema_mb = n_params * 4 / (1024 ** 2)
+        print(f"[memory] EMA copy (fp32): ~{ema_mb:.2f} MB")
+
+    total_static_mb = model_mb + optimizer_mb + (model_mb if cfg.use_ema else 0)
+    print(f"[memory] Total static (model + optimizer + EMA): ~{total_static_mb:.2f} MB")
+
+    if torch.cuda.is_available():
+        total_gpu = torch.cuda.get_device_properties(0).total_memory
+        allocated = torch.cuda.memory_allocated(0)
+        reserved = torch.cuda.memory_reserved(0)
+        print("[memory] === GPU (before Trainer moves model) ===")
+        print(f"[memory] Device total: {total_gpu / 1024**3:.2f} GB")
+        print(f"[memory] Allocated: {allocated / 1024**2:.2f} MB")
+        print(f"[memory] Reserved: {reserved / 1024**2:.2f} MB")
+
+    # First batch from train loader
+    batch = next(iter(dataloader_train))
+    if isinstance(batch, (list, tuple)):
+        print("[memory] === First train batch (tensors) ===")
+        for i, t in enumerate(batch):
+            if isinstance(t, torch.Tensor):
+                print(f"[memory]   batch[{i}] shape={tuple(t.shape)} dtype={t.dtype} -> {_tensor_size_mb(t):.2f} MB")
+        batch_mb = sum(_tensor_size_mb(t) for t in batch if isinstance(t, torch.Tensor))
+    else:
+        batch_mb = _tensor_size_mb(batch)
+        print(f"[memory] First train batch: {batch_mb:.2f} MB")
+    print(f"[memory] Batch total (on CPU): {batch_mb:.2f} MB (on GPU will be same + activations in forward/backward)")
+    print("[memory] ===")
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="train")
@@ -56,6 +105,8 @@ def main(cfg: OmegaConf):
         # pytorch assumes stepping LRScheduler every epoch
         # however huggingface diffusers steps it every batch
     )
+
+    _log_memory_usage(cfg, composer_model, optimizer, dataloader_train)
 
     wandb_logger = WandBLogger(
         project="pfp-train-fixed",
