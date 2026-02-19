@@ -235,7 +235,6 @@ dependencies:
   - matplotlib
   - numba
   - zarr
-  - imagecodecs
   # pytorch3d pre-built binary from the official pytorch3d conda channel.
   # If the channel doesn't yet have a build for torch 2.9.1, comment this out
   # and install via pip (see note below).

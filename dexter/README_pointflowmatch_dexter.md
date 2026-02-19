@@ -56,6 +56,13 @@ conda env create -f dexter/pfp_train_env.yml -p ./pfp-train-env
 conda activate ./pfp-train-env
 ```
 
+Если при `conda env create` появляется длинная ошибка про `imagecodecs` и `python_abi`,
+это из‑за того, что свежие сборки `imagecodecs` требуют Python 3.11+, а в базовом
+`torch-env-dexter` используется 3.10. В актуальной версии `pfp_train_env.yml`
+`imagecodecs` убран из conda‑зависимостей (он подтянется транзитивно через
+`diffusion_policy`), так что после `git pull` и повторного запуска команда должна
+отработать без этой ошибки.
+
 Дальше ставим соседний репозиторий и сам проект. Обе команды запускай из корня `PointFlowMatch`, с уже активированным окружением (`conda activate ./pfp-train-env`). Путь `../diffusion_policy` как раз и есть соседняя папка рядом с `PointFlowMatch`.
 
 ```bash
