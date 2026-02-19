@@ -54,6 +54,9 @@ fi
 conda activate ./pfp-train-env
 echo "Python: $(which python) ($(python -V 2>&1))"
 
+# Ensure sibling repo is importable (editable install can fail to add it on some systems)
+export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
+
 # ── Dataset ──────────────────────────────────────────────────────────────────
 TRAIN_DIR="demos/sim/open_fridge/train"
 VALID_DIR="demos/sim/open_fridge/valid"

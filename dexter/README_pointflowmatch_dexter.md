@@ -63,23 +63,24 @@ conda activate ./pfp-train-env
 `diffusion_policy`), так что после `git pull` и повторного запуска команда должна
 отработать без этой ошибки.
 
-Дальше ставим соседний репозиторий и сам проект. Обе команды запускай из корня `PointFlowMatch`, с уже активированным окружением (`conda activate ./pfp-train-env`). Путь `../diffusion_policy` как раз и есть соседняя папка рядом с `PointFlowMatch`.
+Дальше ставим соседний репозиторий и сам проект. Обе команды запускай из корня `PointFlowMatch`, с уже активированным окружением (`conda activate ./pfp-train-env`). Путь `../diffusion_policy` — соседняя папка рядом с `PointFlowMatch`. Используй `python -m pip`, чтобы пакеты точно попали в тот же Python, с которым потом запускаешь обучение.
 
 ```bash
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
 
-pip install -e ../diffusion_policy
-pip install -e . --no-deps
+python -m pip install -e ../diffusion_policy
+python -m pip install -e . --no-deps
 ```
 
-Проверка, что всё на месте:
+Проверка, что всё на месте (сначала задай `PYTHONPATH`, чтобы Python видел соседний репозиторий):
 
 ```bash
+export PYTHONPATH=~/point_flow_match/diffusion_policy:${PYTHONPATH:-}
 python -c "import diffusion_policy; import pfp; print('OK')"
 ```
 
-Если выводится `OK`, окружение готово к обучению.
+Если выводится `OK`, окружение готово. Если появляется `ModuleNotFoundError: No module named 'diffusion_policy'`, задай `PYTHONPATH` как выше — на некоторых системах editable install не добавляет путь, и явный `PYTHONPATH` это обходит. В Slurm-задаче этот путь уже прописан в `run_pointflowmatch_open_fridge.sbatch`.
 
 > Примечание: если при создании окружения возникнет ошибка на пакете `pytorch3d`,
 > можно закомментировать его строку в `dexter/pfp_train_env.yml` и установить отдельно:
@@ -114,7 +115,7 @@ demos/sim/open_fridge/valid
 
 #### 3. Запуск обучения через Slurm
 
-Из корня `PointFlowMatch`:
+Из корня `PointFlowMatch`. В sbatch-скрипте уже прописан `PYTHONPATH` на соседний `diffusion_policy`, при ручном запуске его нужно выставить самому (см. проверку выше).
 
 ```bash
 cd ~/point_flow_match/PointFlowMatch
