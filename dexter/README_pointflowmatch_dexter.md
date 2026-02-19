@@ -13,14 +13,17 @@ mkdir -p ~/point_flow_match
 cd ~/point_flow_match
 
 # Если репозитории ещё не склонированы:
+# PointFlowMatch — твой форк (или оригинал).
+# diffusion_policy — форк автора PointFlowMatch (ветка develop/eugenio), иначе будет ошибка use_dropout в ConditionalUnet1D.
 git clone https://github.com/machine-solution/point-flow-match-fork.git PointFlowMatch
-git clone https://github.com/real-stanford/diffusion_policy.git diffusion_policy
+git clone https://github.com/chisarie/diffusion_policy.git diffusion_policy
+cd diffusion_policy && git checkout develop/eugenio && cd ..
 
-# Если уже клонировал раньше — просто обнови:
+# Если уже клонировал раньше — обнови и проверь ветку diffusion_policy:
 cd ~/point_flow_match/PointFlowMatch
 git pull
 cd ../diffusion_policy
-git pull
+git fetch origin && git checkout develop/eugenio && git pull
 cd ../PointFlowMatch
 ```
 
