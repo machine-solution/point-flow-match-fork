@@ -252,7 +252,8 @@ dependencies:
       # Robotics
       - spatialmath-python==1.1.9
       - yourdfpy==0.0.56
-      # Deep learning extras
+      # Deep learning extras (huggingface_hub 0.25.x: diffusers 0.27 uses cached_download, removed in 0.26+)
+      - huggingface_hub==0.25.2
       - einops==0.7.0
       - diffusers==0.27.2
       - "composer<=0.21.3"
