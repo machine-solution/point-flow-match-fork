@@ -256,7 +256,8 @@ dependencies:
       - huggingface_hub==0.25.2
       - einops==0.7.0
       - diffusers==0.27.2
-      - "composer<=0.21.3"
+      # PyTorch 2.9: в 0.21 нет совместимости (_refresh_per_optimizer_state). Фиксируем версию для воспроизводимости.
+      - composer==0.23.0
       # Experiment tooling
       - hydra-core==1.3.2
       - "wandb<=0.17.3"
