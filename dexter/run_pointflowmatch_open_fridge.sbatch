@@ -50,6 +50,13 @@ source /opt/miniconda3/etc/profile.d/conda.sh
 conda activate ./pfp-train-env
 echo "Python: $(which python) ($(python -V 2>&1))"
 
+# Чтобы OOM показывал точную строку, а не асинхронный след
+export CUDA_LAUNCH_BLOCKING=1
+
+# Что видит процесс по GPU (при MIG/доле — лимит может быть меньше полной карты)
+echo "=== nvidia-smi (before training) ==="
+nvidia-smi
+
 # Ensure sibling repo is importable (editable install can fail to add it on some systems)
 export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
 

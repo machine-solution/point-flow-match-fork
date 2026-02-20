@@ -31,25 +31,27 @@ def _log_gpu_memory(tag: str):
 
 
 class MemoryProfileCallback(Callback):
-    """Логирует GPU память в ключевых точках начала обучения (первые батчи)."""
-
-    def __init__(self, log_first_n_batches: int = 3):
-        self.log_first_n_batches = log_first_n_batches
+    """Принты по памяти внутри цикла обучения (INIT → FIT_START → первый батч)."""
 
     def run_event(self, event: Event, state, logger):
         if not torch.cuda.is_available():
             return
         batch = getattr(state.timestamp, "batch", 0) if state.timestamp else 0
         if event == Event.INIT:
-            _log_gpu_memory("INIT (model on device)")
+            print("[memory] callback: INIT (model on device)")
+            _log_gpu_memory("  INIT")
         elif event == Event.FIT_START:
-            _log_gpu_memory("FIT_START")
-        elif event == Event.BATCH_START and batch < self.log_first_n_batches:
-            _log_gpu_memory(f"BATCH_START batch={batch}")
+            print("[memory] callback: FIT_START")
+            _log_gpu_memory("  FIT_START")
+        elif event == Event.BATCH_START and batch == 0:
+            print("[memory] callback: BATCH_START batch=0")
+            _log_gpu_memory("  BATCH_START 0")
         elif event == Event.AFTER_FORWARD and batch == 0:
-            _log_gpu_memory("AFTER_FORWARD batch=0 (activations in memory)")
+            print("[memory] callback: AFTER_FORWARD batch=0")
+            _log_gpu_memory("  AFTER_FORWARD 0")
         elif event == Event.AFTER_BACKWARD and batch == 0:
-            _log_gpu_memory("AFTER_BACKWARD batch=0 (after grad computation)")
+            print("[memory] callback: AFTER_BACKWARD batch=0")
+            _log_gpu_memory("  AFTER_BACKWARD 0")
 
 
 def _log_memory_usage(cfg: OmegaConf, composer_model: ComposerModel, optimizer, dataloader_train):
@@ -114,6 +116,9 @@ def main(cfg: OmegaConf):
         dataset_valid = RobotDatasetImages(data_path_valid, **cfg.dataset)
     else:
         raise ValueError(f"Unknown observation mode: {cfg.obs_mode}")
+    print("[memory] after dataset_train, dataset_valid")
+    _log_gpu_memory("after datasets")
+
     dataloader_train = DataLoader(
         dataset_train,
         shuffle=True,
@@ -126,9 +131,17 @@ def main(cfg: OmegaConf):
         **cfg.dataloader,
         persistent_workers=True if cfg.dataloader.num_workers > 0 else False,
     )
+    print("[memory] after dataloader_train, dataloader_valid")
+    _log_gpu_memory("after dataloaders")
 
     composer_model: ComposerModel = hydra.utils.instantiate(cfg.model)
+    print("[memory] after composer_model = instantiate(cfg.model)")
+    _log_gpu_memory("after model create")
+
     optimizer = hydra.utils.instantiate(cfg.optimizer, composer_model.parameters())
+    print("[memory] after optimizer")
+    _log_gpu_memory("after optimizer")
+
     lr_scheduler = get_scheduler(
         cfg.lr_scheduler.name,
         optimizer=optimizer,
@@ -137,13 +150,10 @@ def main(cfg: OmegaConf):
         # pytorch assumes stepping LRScheduler every epoch
         # however huggingface diffusers steps it every batch
     )
+    print("[memory] after lr_scheduler")
+    _log_gpu_memory("after lr_scheduler")
 
     _log_memory_usage(cfg, composer_model, optimizer, dataloader_train)
-
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
-        print("[memory] Before Trainer(): cache emptied, peak stats reset")
 
     wandb_logger = WandBLogger(
         project="pfp-train-fixed",
@@ -153,6 +163,30 @@ def main(cfg: OmegaConf):
             "mode": "online" if cfg.log_wandb else "disabled",
         },
     )
+    print("[memory] after wandb_logger")
+    _log_gpu_memory("after wandb_logger")
+
+    print("[memory] >>> about to call Trainer(...)")
+    _log_gpu_memory(">>> right before Trainer()")
+
+    # Патч: логируем первый и следующие вызовы tensor_to_device внутри Composer (там падает OOM).
+    try:
+        import composer.devices.device_gpu as _dg
+        _orig = _dg.DeviceGPU.tensor_to_device
+        _call_count = [0]
+
+        def _logged_tensor_to_device(self, tensor):
+            _call_count[0] += 1
+            print(f"[memory] DeviceGPU.tensor_to_device call #{_call_count[0]} tensor.shape={tuple(tensor.shape)} dtype={tensor.dtype}")
+            _log_gpu_memory("  before tensor_to_device")
+            out = _orig(self, tensor)
+            _log_gpu_memory("  after tensor_to_device")
+            return out
+
+        _dg.DeviceGPU.tensor_to_device = _logged_tensor_to_device
+        print("[memory] Patched DeviceGPU.tensor_to_device for debug")
+    except Exception as e:
+        print(f"[memory] Could not patch DeviceGPU: {e}")
 
     trainer = Trainer(
         model=composer_model,
@@ -164,7 +198,7 @@ def main(cfg: OmegaConf):
         step_schedulers_every_batch=True,
         device="gpu" if DEVICE.type == "cuda" else "cpu",
         loggers=[wandb_logger],
-        callbacks=[LRMonitor(), MemoryProfileCallback(log_first_n_batches=3)],
+        callbacks=[LRMonitor(), MemoryProfileCallback()],
         save_folder="ckpt/{run_name}",
         save_interval=f"{cfg.save_each_n_epochs}ep",
         save_num_checkpoints_to_keep=3,
@@ -173,11 +207,18 @@ def main(cfg: OmegaConf):
         autoresume=True if cfg.run_name is not None else False,
         spin_dataloaders=False
     )
+    print("[memory] <<< Trainer() returned")
+    _log_gpu_memory("<<< after Trainer()")
+
     wandb.watch(composer_model)
     # Save the used cfg for inference
     OmegaConf.save(cfg, "ckpt/" + trainer.state.run_name + "/config.yaml")
 
+    print("[memory] >>> about to call trainer.fit()")
+    _log_gpu_memory(">>> before fit()")
     trainer.fit()
+    print("[memory] <<< trainer.fit() returned")
+    _log_gpu_memory("<<< after fit()")
     run_name = trainer.state.run_name
     wandb.finish()
     trainer.close()
