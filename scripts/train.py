@@ -54,8 +54,8 @@ class MemoryProfileCallback(Callback):
             _log_gpu_memory("  AFTER_BACKWARD 0")
 
 
-def _log_memory_usage(cfg: OmegaConf, composer_model: ComposerModel, optimizer, dataloader_train):
-    """Log model size, optimizer/EMA footprint, and first batch sizes for memory debugging."""
+def _log_memory_usage(cfg: OmegaConf, composer_model: ComposerModel, optimizer, dataset_train):
+    """Log model size, optimizer/EMA footprint, and one sample size (no dataloader iteration)."""
     n_params = sum(p.numel() for p in composer_model.parameters())
     n_trainable = sum(p.numel() for p in composer_model.parameters() if p.requires_grad)
     model_mb = n_params * 4 / (1024 ** 2)  # fp32
@@ -83,18 +83,19 @@ def _log_memory_usage(cfg: OmegaConf, composer_model: ComposerModel, optimizer, 
         print(f"[memory] Allocated: {allocated / 1024**2:.2f} MB")
         print(f"[memory] Reserved: {reserved / 1024**2:.2f} MB")
 
-    # First batch from train loader
-    batch = next(iter(dataloader_train))
-    if isinstance(batch, (list, tuple)):
-        print("[memory] === First train batch (tensors) ===")
-        for i, t in enumerate(batch):
+    # Размер одного сэмпла из датасета (не итерируем dataloader_train — иначе Composer ругается на active iterator)
+    sample = dataset_train[0]
+    if isinstance(sample, (list, tuple)):
+        print("[memory] === One train sample (tensors) ===")
+        for i, t in enumerate(sample):
             if isinstance(t, torch.Tensor):
-                print(f"[memory]   batch[{i}] shape={tuple(t.shape)} dtype={t.dtype} -> {_tensor_size_mb(t):.2f} MB")
-        batch_mb = sum(_tensor_size_mb(t) for t in batch if isinstance(t, torch.Tensor))
+                print(f"[memory]   sample[{i}] shape={tuple(t.shape)} dtype={t.dtype} -> {_tensor_size_mb(t):.2f} MB")
+        sample_mb = sum(_tensor_size_mb(t) for t in sample if isinstance(t, torch.Tensor))
     else:
-        batch_mb = _tensor_size_mb(batch)
-        print(f"[memory] First train batch: {batch_mb:.2f} MB")
-    print(f"[memory] Batch total (on CPU): {batch_mb:.2f} MB (on GPU will be same + activations in forward/backward)")
+        sample_mb = _tensor_size_mb(sample)
+        print(f"[memory] One train sample: {sample_mb:.2f} MB")
+    batch_size = cfg.dataloader.get("batch_size", 128)
+    print(f"[memory] Estimated batch (×{batch_size}) ~{sample_mb * batch_size:.2f} MB on GPU + activations")
     print("[memory] ===")
 
 
@@ -153,7 +154,7 @@ def main(cfg: OmegaConf):
     print("[memory] after lr_scheduler")
     _log_gpu_memory("after lr_scheduler")
 
-    _log_memory_usage(cfg, composer_model, optimizer, dataloader_train)
+    _log_memory_usage(cfg, composer_model, optimizer, dataset_train)
 
     wandb_logger = WandBLogger(
         project="pfp-train-fixed",
