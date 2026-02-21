@@ -168,3 +168,51 @@ bash dexter/download_dataset.sh      # если датасета ещё нет
 sbatch dexter/run_pointflowmatch_open_fridge.sbatch
 ```
 
+#### 5. Где лежат веса и как скачать на свою машину
+
+После обучения чекпоинты лежат в двух местах на Dexter:
+
+1. **В репозитории:** `~/point_flow_match/PointFlowMatch/ckpt/<run_name>/`  
+   Пример `run_name`: `1771602945-cautious-adder` (есть в логе обучения, строка `Run name: ...`).
+2. **Бэкап (из sbatch):** `~/checkpoints/pointflowmatch/<run_name>/`  
+   Путь задаётся переменной `CKPT_BACKUP_DIR` в `dexter/run_pointflowmatch_open_fridge.sbatch`.
+
+Внутри папки `run_name`: `config.yaml`, файлы вида `ep500.pt`, `ep1000.pt`, `latest.pt` (или только `latest.pt`).
+
+**Скачать на локальную машину** (подставь свой логин и `run_name`):
+
+```bash
+# из корня репо на Dexter
+scp -r USER@Dexter-Host:~/point_flow_match/PointFlowMatch/ckpt/<run_name> ./ckpt/
+
+# или из бэкапа
+scp -r USER@Dexter-Host:~/checkpoints/pointflowmatch/<run_name> ./ckpt/
+```
+
+На локальной машине нужна папка `ckpt/` в корне клонированного PointFlowMatch; в неё и кладётся `<run_name>`.
+
+**Валидация (100 эпизодов, accuracy):** запуск `scripts/validate_accuracy.py` — см. раздел 6.
+
+#### 6. Валидация: 100 эпизодов, accuracy
+
+Скрипт `scripts/validate_accuracy.py` запускает 100 эпизодов в симуляции и считает долю успешных (accuracy). Чекпоинт должен уже лежать в `ckpt/<run_name>/`.
+
+**На Dexter** (после обучения, в headless):
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+conda activate ./pfp-train-env
+export PYTHONPATH=~/point_flow_match/diffusion_policy:${PYTHONPATH:-}
+
+python scripts/validate_accuracy.py policy.ckpt_name=<run_name> env_runner.num_episodes=100
+```
+
+**Локально** (если чекпоинт скачан в `ckpt/<run_name>` и есть CoppeliaSim/RLBench):
+
+```bash
+conda activate pfp_env
+python scripts/validate_accuracy.py policy.ckpt_name=<run_name> env_runner.num_episodes=100
+```
+
+В конце выводится строка вида: `Accuracy: 87/100 (87.0%)`.
+

@@ -25,7 +25,7 @@
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=24:00:00
+#SBATCH --time=168:00:00
 
 set -e
 
@@ -75,12 +75,12 @@ fi
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
 echo "=== Starting training ==="
-# Уменьшенный batch_size (64) чтобы избежать CUDA OOM при 1 GPU; при необходимости понизь до 32
+# batch_size=128 (при OOM понизь до 64 в override)
 python scripts/train.py \
     task_name=open_fridge \
     +experiment=pointflowmatch \
     dataloader.num_workers=8 \
-    dataloader.batch_size=64 \
+    dataloader.batch_size=128 \
     log_wandb=False
 
 echo "=== Training finished ==="

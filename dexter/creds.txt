@@ -1,2 +1,17 @@
 ssh st094579@195.70.199.18 -p 22
 AW8udx-K
+
+
+
+scp -r USER@195.70.199.18:~/point_flow_match/PointFlowMatch/ckpt/<run_name> ./ckpt/
+
+
+
+scp -r st094579@195.70.199.18:~/point_flow_match/PointFlowMatch/ckpt/1771602945-cautious-adder ./ckpt/
+
+# проверить место квоту
+```
+   df -h ~
+   df -h .
+   quota -s 2>/dev/null || true
+```
