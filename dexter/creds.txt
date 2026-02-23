@@ -7,11 +7,32 @@ scp -r USER@195.70.199.18:~/point_flow_match/PointFlowMatch/ckpt/<run_name> ./ck
 
 
 
-scp -r st094579@195.70.199.18:~/point_flow_match/PointFlowMatch/ckpt/1771602945-cautious-adder ./ckpt/
+scp -r st094579@195.70.199.18:~/point_flow_match/PointFlowMatch/ckpt/1771691384-boisterous-beluga ./ckpt/
 
 # проверить место квоту
 ```
    df -h ~
    df -h .
    quota -s 2>/dev/null || true
+```
+
+посмотреть, что занимает место
+
+```
+cd ~
+du -h --max-depth=1 2>/dev/null | sort -h | tail -n 20
+```
+
+Очистить кеши конда
+```
+conda clean -a -y
+pip cache purge
+```
+
+Почистить логи и артефакты
+```
+cd ~/point_flow_match/PointFlowMatch
+rm -rf logs/*
+rm -rf wandb/*
+rm -rf hydra/*
 ```

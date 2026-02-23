@@ -81,7 +81,8 @@ python scripts/train.py \
     +experiment=pointflowmatch \
     dataloader.num_workers=8 \
     dataloader.batch_size=128 \
-    log_wandb=False
+    log_wandb=False \
+    run_name=open_fridge_2302_500
 
 echo "=== Training finished ==="
 
