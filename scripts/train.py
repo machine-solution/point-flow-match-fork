@@ -5,6 +5,7 @@ import subprocess
 import torch
 from omegaconf import OmegaConf
 from omegaconf.listconfig import ListConfig
+from omegaconf.base import ContainerMetadata
 import torch.serialization as ts
 from torch.utils.data import DataLoader
 from composer.trainer import Trainer
@@ -19,7 +20,7 @@ from pfp.data.dataset_pcd import RobotDatasetPcd
 from pfp.data.dataset_images import RobotDatasetImages
 
 
-ts.add_safe_globals([ListConfig])
+ts.add_safe_globals([ListConfig, ContainerMetadata])
 
 def _tensor_size_mb(t: torch.Tensor) -> float:
     return t.numel() * t.element_size() / (1024 ** 2)
