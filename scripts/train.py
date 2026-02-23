@@ -4,6 +4,8 @@ import wandb
 import subprocess
 import torch
 from omegaconf import OmegaConf
+from omegaconf.listconfig import ListConfig
+import torch.serialization as ts
 from torch.utils.data import DataLoader
 from composer.trainer import Trainer
 from composer.loggers import WandBLogger
@@ -16,6 +18,8 @@ from pfp import DEVICE, DATA_DIRS, set_seeds
 from pfp.data.dataset_pcd import RobotDatasetPcd
 from pfp.data.dataset_images import RobotDatasetImages
 
+
+ts.add_safe_globals([ListConfig])
 
 def _tensor_size_mb(t: torch.Tensor) -> float:
     return t.numel() * t.element_size() / (1024 ** 2)
