@@ -76,13 +76,17 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
 echo "=== Starting training ==="
 # batch_size=128 (при OOM понизь до 64 в override)
+# Вариант: продолжить обучение, инициализировав веса из ckpt/open_fridge_2302_500/ep500*
+# При желании начни новый ран с нуля — просто убери resume_* и поменяй run_name.
 python scripts/train.py \
     task_name=open_fridge \
     +experiment=pointflowmatch \
     dataloader.num_workers=8 \
     dataloader.batch_size=128 \
-    log_wandb=False
-    # run_name=open_fridge_2302_500
+    log_wandb=False \
+    resume_from_ckpt_name=open_fridge_2302_500 \
+    resume_from_ckpt_episode=ep500 \
+    run_name=open_fridge_2302_500_resume
 
 echo "=== Training finished ==="
 

@@ -10,7 +10,9 @@ n_pred_steps: 32  # Must be divisible by 4
 use_ema: True
 save_each_n_epochs: 500
 obs_mode: pcd  # pcd | rgb
-run_name: null  # set this to continue training from previous ckpt
+run_name: null  # optional explicit run name for this training run (no autoresume)
+resume_from_ckpt_name: null  # if set, initialize model weights from ckpt/<name>/*
+resume_from_ckpt_episode: latest  # e.g. latest, ep500, ep1000
 
 
 # env_runner:

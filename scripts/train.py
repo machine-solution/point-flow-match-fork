@@ -16,12 +16,12 @@ from composer.models import ComposerModel
 from composer.algorithms import EMA
 from composer.core import Callback, Event
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
-from pfp import DEVICE, DATA_DIRS, set_seeds
+from pfp import DEVICE, DATA_DIRS, REPO_DIRS, set_seeds
 from pfp.data.dataset_pcd import RobotDatasetPcd
 from pfp.data.dataset_images import RobotDatasetImages
 
 
-ts.add_safe_globals([ListConfig, ContainerMetadata, Any])
+ts.add_safe_globals([ListConfig, ContainerMetadata, Any, list])
 
 def _tensor_size_mb(t: torch.Tensor) -> float:
     return t.numel() * t.element_size() / (1024 ** 2)
@@ -145,6 +145,21 @@ def main(cfg: OmegaConf):
     print("[memory] after composer_model = instantiate(cfg.model)")
     _log_gpu_memory("after model create")
 
+    # Optional warm-start from an existing policy checkpoint (without Composer autoresume).
+    resume_name = getattr(cfg, "resume_from_ckpt_name", None)
+    if resume_name is not None:
+        resume_episode = getattr(cfg, "resume_from_ckpt_episode", "latest")
+        ckpt_dir = REPO_DIRS.CKPT / resume_name
+        ckpt_path_list = list(ckpt_dir.glob(f"{resume_episode}*"))
+        assert len(ckpt_path_list) > 0, f"No checkpoint found in {ckpt_dir} with {resume_episode}"
+        assert len(ckpt_path_list) < 2, f"Multiple ckpts found in {ckpt_dir} with {resume_episode}"
+        ckpt_fpath = ckpt_path_list[0]
+        print(f"[resume] Loading model weights from {ckpt_fpath}")
+        state_dict = torch.load(ckpt_fpath, map_location=DEVICE, weights_only=False)
+        # Same layout as in FMPolicy.load_from_checkpoint: state['state']['model']
+        composer_model.load_state_dict(state_dict["state"]["model"], strict=False)
+        print("[resume] Weights loaded into composer_model")
+
     optimizer = hydra.utils.instantiate(cfg.optimizer, composer_model.parameters())
     print("[memory] after optimizer")
     _log_gpu_memory("after optimizer")
@@ -210,8 +225,8 @@ def main(cfg: OmegaConf):
         save_interval=f"{cfg.save_each_n_epochs}ep",
         save_num_checkpoints_to_keep=3,
         algorithms=[EMA()] if cfg.use_ema else None,
-        run_name=cfg.run_name,  # set this to continue training from previous ckpt
-        autoresume=True if cfg.run_name is not None else False,
+        run_name=cfg.run_name,  # optional explicit name; no autoresume
+        autoresume=False,
         spin_dataloaders=False
     )
     print("[memory] <<< Trainer() returned")
