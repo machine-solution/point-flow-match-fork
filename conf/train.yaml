@@ -8,7 +8,7 @@ x_dim: "${eval: '${obs_features_dim} + ${y_dim}'}"
 n_obs_steps: 2
 n_pred_steps: 32  # Must be divisible by 4
 use_ema: True
-save_each_n_epochs: 500
+save_each_n_epochs: 100
 obs_mode: pcd  # pcd | rgb
 run_name: null  # optional explicit run name for this training run (no autoresume)
 resume_from_ckpt_name: null  # if set, initialize model weights from ckpt/<name>/*

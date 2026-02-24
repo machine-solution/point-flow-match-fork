@@ -1,4 +1,5 @@
 import os
+import shutil
 import hydra
 import wandb
 import subprocess
@@ -58,6 +59,52 @@ class MemoryProfileCallback(Callback):
         elif event == Event.AFTER_BACKWARD and batch == 0:
             print("[memory] callback: AFTER_BACKWARD batch=0")
             _log_gpu_memory("  AFTER_BACKWARD 0")
+
+
+class ResourceMonitorCallback(Callback):
+    """Раз в эпоху пишет в лог: диск (свободно), RAM/swap, GPU. Чтобы при падении было видно, что закончилось."""
+
+    def __init__(self, path_to_check=None):
+        self.path_to_check = path_to_check or os.getcwd()
+
+    def run_event(self, event: Event, state, logger):
+        if event != Event.EPOCH_END:
+            return
+        epoch = getattr(state.timestamp, "epoch", 0) if state.timestamp else 0
+        lines = [f"[resources] Epoch {epoch} —"]
+
+        # Диск
+        try:
+            du = shutil.disk_usage(self.path_to_check)
+            free_gb = du.free / (1024 ** 3)
+            total_gb = du.total / (1024 ** 3)
+            lines.append(f"  disk: {free_gb:.1f} GB free / {total_gb:.1f} GB total ({self.path_to_check})")
+        except Exception as e:
+            lines.append(f"  disk: error {e}")
+
+        # RAM и swap (через free -h, одна строка)
+        try:
+            r = subprocess.run(
+                ["free", "-h"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if r.returncode == 0 and r.stdout:
+                for line in r.stdout.strip().split("\n"):
+                    if line.startswith("Mem:") or line.startswith("Swap:"):
+                        lines.append(f"  {line.strip()}")
+        except Exception as e:
+            lines.append(f"  RAM/swap: error {e}")
+
+        # GPU
+        if torch.cuda.is_available():
+            a = torch.cuda.memory_allocated(0) / 1024 ** 3
+            r = torch.cuda.memory_reserved(0) / 1024 ** 3
+            m = torch.cuda.max_memory_allocated(0) / 1024 ** 3
+            lines.append(f"  GPU: alloc={a:.2f} GB  reserved={r:.2f} GB  max_alloc={m:.2f} GB")
+
+        print("\n".join(lines))
 
 
 def _log_memory_usage(cfg: OmegaConf, composer_model: ComposerModel, optimizer, dataset_train):
@@ -191,25 +238,6 @@ def main(cfg: OmegaConf):
     print("[memory] >>> about to call Trainer(...)")
     _log_gpu_memory(">>> right before Trainer()")
 
-    # Патч: логируем первый и следующие вызовы tensor_to_device внутри Composer (там падает OOM).
-    try:
-        import composer.devices.device_gpu as _dg
-        _orig = _dg.DeviceGPU.tensor_to_device
-        _call_count = [0]
-
-        def _logged_tensor_to_device(self, tensor):
-            _call_count[0] += 1
-            print(f"[memory] DeviceGPU.tensor_to_device call #{_call_count[0]} tensor.shape={tuple(tensor.shape)} dtype={tensor.dtype}")
-            _log_gpu_memory("  before tensor_to_device")
-            out = _orig(self, tensor)
-            _log_gpu_memory("  after tensor_to_device")
-            return out
-
-        _dg.DeviceGPU.tensor_to_device = _logged_tensor_to_device
-        print("[memory] Patched DeviceGPU.tensor_to_device for debug")
-    except Exception as e:
-        print(f"[memory] Could not patch DeviceGPU: {e}")
-
     trainer = Trainer(
         model=composer_model,
         train_dataloader=dataloader_train,
@@ -220,7 +248,11 @@ def main(cfg: OmegaConf):
         step_schedulers_every_batch=True,
         device="gpu" if DEVICE.type == "cuda" else "cpu",
         loggers=[wandb_logger],
-        callbacks=[LRMonitor(), MemoryProfileCallback()],
+        callbacks=[
+            LRMonitor(),
+            MemoryProfileCallback(),
+            ResourceMonitorCallback(path_to_check=str(REPO_DIRS.ROOT)),
+        ],
         save_folder="ckpt/{run_name}",
         save_interval=f"{cfg.save_each_n_epochs}ep",
         save_num_checkpoints_to_keep=3,
@@ -233,8 +265,10 @@ def main(cfg: OmegaConf):
     _log_gpu_memory("<<< after Trainer()")
 
     wandb.watch(composer_model)
-    # Save the used cfg for inference
-    OmegaConf.save(cfg, "ckpt/" + trainer.state.run_name + "/config.yaml")
+    # Save the used cfg for inference (same absolute path as checkpoints)
+    ckpt_run_dir = REPO_DIRS.CKPT / trainer.state.run_name
+    ckpt_run_dir.mkdir(parents=True, exist_ok=True)
+    OmegaConf.save(cfg, str(ckpt_run_dir / "config.yaml"))
 
     print("[memory] >>> about to call trainer.fit()")
     _log_gpu_memory(">>> before fit()")

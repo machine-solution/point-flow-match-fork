@@ -74,6 +74,8 @@ fi
 # ── Training ─────────────────────────────────────────────────────────────────
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
+echo "=== Disk space before training ==="
+df -h . /tmp 2>/dev/null || df -h .
 echo "=== Starting training ==="
 # batch_size=128 (при OOM понизь до 64 в override)
 # Вариант: продолжить обучение, инициализировав веса из ckpt/open_fridge_2302_500/ep500*
