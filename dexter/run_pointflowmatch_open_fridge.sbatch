@@ -85,10 +85,10 @@ python scripts/train.py \
     +experiment=pointflowmatch \
     dataloader.num_workers=8 \
     dataloader.batch_size=128 \
-    log_wandb=False \
-    resume_from_ckpt_name=open_fridge_2302_500 \
-    resume_from_ckpt_episode=ep500 \
-    run_name=open_fridge_2302_500_resume
+    log_wandb=False
+    # resume_from_ckpt_name=open_fridge_2302_500 \
+    # resume_from_ckpt_episode=ep500 \
+    # run_name=open_fridge_2302_500_resume
 
 echo "=== Training finished ==="
 
