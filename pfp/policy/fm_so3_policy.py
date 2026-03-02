@@ -316,7 +316,7 @@ class FMSO3Policy(ComposerModel, BasePolicy):
         assert len(ckpt_path_list) < 2, f"Multiple ckpts found in {ckpt_dir} with {ckpt_episode}"
         ckpt_fpath = ckpt_path_list[0]
 
-        state_dict = torch.load(ckpt_fpath, map_location=DEVICE)
+        state_dict = torch.load(ckpt_fpath, map_location=DEVICE, weights_only=False)
         cfg = OmegaConf.load(ckpt_dir / "config.yaml")
         # cfg.model.obs_encoder.encoder.random_crop = False
         assert cfg.model._target_.split(".")[-1] == cls.__name__

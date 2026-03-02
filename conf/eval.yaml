@@ -2,7 +2,7 @@ seed: 5678
 log_wandb: False
 
 env_runner:
-  num_episodes: 100
+  num_episodes: 300
   max_episode_length: 200
   verbose: True
   env_config:

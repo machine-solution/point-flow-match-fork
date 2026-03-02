@@ -258,7 +258,13 @@ class FMPolicy(ComposerModel, BasePolicy):
         assert len(ckpt_path_list) < 2, f"Multiple ckpts found in {ckpt_dir} with {ckpt_episode}"
         ckpt_fpath = ckpt_path_list[0]
 
-        state_dict = torch.load(ckpt_fpath, map_location=DEVICE)
+        # Чекпоинт мог быть сохранён с NumPy 2.x (numpy._core); при NumPy 1.x подменяем для unpickle
+        import sys
+        import numpy as _np
+        if "numpy._core" not in sys.modules and hasattr(_np, "core"):
+            sys.modules["numpy._core"] = _np.core
+
+        state_dict = torch.load(ckpt_fpath, map_location=DEVICE, weights_only=False)
         cfg = OmegaConf.load(ckpt_dir / "config.yaml")
         # cfg.model.obs_encoder.encoder.random_crop = False
         cfg.model.subs_factor = subs_factor

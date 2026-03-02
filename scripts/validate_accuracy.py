@@ -11,6 +11,15 @@ _diffusion_policy_path = os.path.join(os.path.dirname(os.path.dirname(__file__))
 if os.path.exists(_diffusion_policy_path) and _diffusion_policy_path not in sys.path:
     sys.path.insert(0, _diffusion_policy_path)
 
+# PyTorch 2.7+: _refresh_per_optimizer_state в torch.amp.grad_scaler, Composer импортирует из torch.cuda.amp
+import torch.cuda.amp.grad_scaler as _cuda_gs
+if not hasattr(_cuda_gs, "_refresh_per_optimizer_state"):
+    try:
+        from torch.amp.grad_scaler import _refresh_per_optimizer_state
+        _cuda_gs._refresh_per_optimizer_state = _refresh_per_optimizer_state
+    except ImportError:
+        pass
+
 import hydra
 import wandb
 from omegaconf import OmegaConf, open_dict

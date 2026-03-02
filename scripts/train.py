@@ -257,8 +257,10 @@ def main(cfg: OmegaConf):
         save_interval=f"{cfg.save_each_n_epochs}ep",
         save_num_checkpoints_to_keep=3,
         algorithms=[EMA()] if cfg.use_ema else None,
-        run_name=cfg.run_name,  # optional explicit name; no autoresume
-        autoresume=False,
+        run_name=cfg.run_name,
+        # Full Composer autoresume (LR, optimizer, epoch) только при run_name и без resume_from_ckpt_name.
+        # Работает с PyTorch 2.5; в 2.6+ torch.load(weights_only=True) ломает загрузку.
+        autoresume=bool(cfg.run_name and not getattr(cfg, "resume_from_ckpt_name", None)),
         spin_dataloaders=False
     )
     print("[memory] <<< Trainer() returned")

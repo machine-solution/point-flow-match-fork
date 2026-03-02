@@ -1,0 +1,1 @@
+./bash/run_validate_accuracy.sh: line 37: conda: command not found
