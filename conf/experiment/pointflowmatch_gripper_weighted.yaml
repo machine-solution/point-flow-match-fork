@@ -1,0 +1,9 @@
+# @package _global_
+defaults:
+  - override /model: flow
+
+model:
+  use_gripper_motion_weights: true
+  gripper_motion_lambda: 3.0
+  gripper_motion_window: 2
+

@@ -31,3 +31,8 @@
     xyz: 10.0
     rot6d: 10.0
     grip: 1.0
+
+  # Time weighting around gripper state changes.
+  use_gripper_motion_weights: false
+  gripper_motion_lambda: 3.0
+  gripper_motion_window: 1

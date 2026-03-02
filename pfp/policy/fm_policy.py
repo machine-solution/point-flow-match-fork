@@ -30,6 +30,9 @@ class FMPolicy(ComposerModel, BasePolicy):
         noise_type: str = "gaussian",
         noise_scale: float = 1.0,
         loss_type: str = "l2",
+        use_gripper_motion_weights: bool = False,
+        gripper_motion_lambda: float = 3.0,
+        gripper_motion_window: int = 1,
         flow_schedule: str = "linear",
         exp_scale: float = None,
         snr_sampler: str = "uniform",
@@ -52,6 +55,10 @@ class FMPolicy(ComposerModel, BasePolicy):
         self.noise_scale = noise_scale
         self.ny_shape = (n_pred_steps, y_dim)
         self.l_w = loss_weights
+        self.loss_type = loss_type
+        self.use_gripper_motion_weights = use_gripper_motion_weights
+        self.gripper_motion_lambda = gripper_motion_lambda
+        self.gripper_motion_window = gripper_motion_window
         self.flow_schedule = flow_schedule
         self.exp_scale = exp_scale
         self.snr_sampler = snr_sampler
@@ -125,6 +132,51 @@ class FMPolicy(ComposerModel, BasePolicy):
         else:
             raise NotImplementedError
 
+    def _per_timestep_loss(
+        self, pred_vel: torch.Tensor, target_vel: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return per-timestep losses for xyz, rot6d, grip with shape [B, T]."""
+        if self.loss_type == "l2":
+            diff_xyz = pred_vel[..., :3] - target_vel[..., :3]
+            diff_rot6d = pred_vel[..., 3:9] - target_vel[..., 3:9]
+            diff_grip = pred_vel[..., 9] - target_vel[..., 9]
+            per_xyz = (diff_xyz ** 2).mean(dim=-1)
+            per_rot6d = (diff_rot6d ** 2).mean(dim=-1)
+            per_grip = (diff_grip ** 2)
+        elif self.loss_type == "l1":
+            diff_xyz = pred_vel[..., :3] - target_vel[..., :3]
+            diff_rot6d = pred_vel[..., 3:9] - target_vel[..., 3:9]
+            diff_grip = pred_vel[..., 9] - target_vel[..., 9]
+            per_xyz = diff_xyz.abs().mean(dim=-1)
+            per_rot6d = diff_rot6d.abs().mean(dim=-1)
+            per_grip = diff_grip.abs()
+        else:
+            raise NotImplementedError
+        return per_xyz, per_rot6d, per_grip
+
+    def _compute_gripper_weights(self, ny: torch.Tensor) -> torch.Tensor:
+        """Return time weights [B, T] around gripper state changes, normalized to mean 1."""
+        B, T, _ = ny.shape
+        g = ny[..., 9]
+        if not self.use_gripper_motion_weights or T <= 1:
+            return torch.ones((B, T), device=ny.device, dtype=ny.dtype)
+
+        dg = g[:, 1:] - g[:, :-1]
+        transitions = (dg.abs() > 0.5)
+        mark = torch.zeros_like(g, dtype=torch.bool)
+        mark[:, 1:] = transitions
+
+        important = mark.clone()
+        w = self.gripper_motion_window
+        for k in range(1, w + 1):
+            important |= mark.roll(shifts=k, dims=1)
+            important |= mark.roll(shifts=-k, dims=1)
+
+        weights = torch.ones_like(g, dtype=ny.dtype)
+        weights[important] = self.gripper_motion_lambda
+        weights = weights / (weights.mean(dim=1, keepdim=True) + 1e-8)
+        return weights
+
     # ############### Training ################
 
     def forward(self, batch):
@@ -163,8 +215,7 @@ class FMPolicy(ComposerModel, BasePolicy):
     ):
         nx: torch.Tensor = self.obs_encoder(pcd, robot_state_obs)
         ny: torch.Tensor = robot_state_pred
-
-        B = ny.shape[0]
+        B, T, _ = ny.shape
         t = self._sample_snr(B)
         z0 = self._init_noise(ny.shape[0])
         z1 = ny
@@ -172,9 +223,12 @@ class FMPolicy(ComposerModel, BasePolicy):
         target_vel = z1 - z0
         timesteps = t.squeeze() * self.pos_emb_scale if self.time_conditioning else None
         pred_vel = self.diffusion_net(z_t, timesteps, global_cond=nx)
-        loss_xyz = self.loss_fun(pred_vel[..., :3], target_vel[..., :3])
-        loss_rot6d = self.loss_fun(pred_vel[..., 3:9], target_vel[..., 3:9])
-        loss_grip = self.loss_fun(pred_vel[..., 9], target_vel[..., 9])
+        per_xyz, per_rot6d, per_grip = self._per_timestep_loss(pred_vel, target_vel)
+        weights = self._compute_gripper_weights(ny)
+
+        loss_xyz = (per_xyz * weights).mean()
+        loss_rot6d = (per_rot6d * weights).mean()
+        loss_grip = (per_grip * weights).mean()
         return loss_xyz, loss_rot6d, loss_grip
 
     # ############### Inference ################

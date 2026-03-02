@@ -124,11 +124,20 @@ demos/sim/open_fridge/valid
 
 На Dexter в sbatch используется системный conda: `source /opt/miniconda3/etc/profile.d/conda.sh` (как в примере из инструкции кластера).
 
+**Базовая модель:**
+
 ```bash
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
-
 sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+```
+
+**Вариант с весами вокруг смены гриппера:**
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+conda activate ./pfp-train-env
+sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
 ```
 
 Проверить очередь и логи:
@@ -147,6 +156,10 @@ tail -f logs/pfm_open_fridge_<JOB>.out
 - по окончании копирует чекпоинты из `ckpt/` в
   `${HOME}/checkpoints/pointflowmatch` (можно поменять путь в переменной
   `CKPT_BACKUP_DIR` в начале `.sbatch`).
+
+Скрипт `run_pointflowmatch_open_fridge_gripper_weighted.sbatch` делает всё то же самое,
+но использует эксперимент `+experiment=pointflowmatch_gripper_weighted`, где лосс по
+времени усиливается в окрестности смены гриппера (см. раздел 8).
 
 #### 4. Резюме команд (короткая шпаргалка)
 
@@ -229,4 +242,51 @@ python scripts/validate_accuracy.py policy.ckpt_name=<run_name> env_runner.num_e
    - в sbatch добавь в вызов `train.py` переопределения: `dataloader.batch_size=64` и/или `dataloader.num_workers=4`;
    - так свопа будет меньше и диск не будет забиваться под своп-файл.
 3. **Чекпоинты** теперь пишутся в одну папку в репо (`ckpt/<run_name>/`), а не в отдельную папку на каждый запуск; перед обучением старые `outputs/` удаляются. Если падает при сохранении чекпоинта — проверь, что на разделе с репо есть несколько гигабайт свободного места (нужно под новый файл до удаления старого).
+
+#### 8. Эксперимент с весами вокруг смены гриппера
+
+Есть альтернативный режим обучения, где лосс по времени усиливается в окрестности моментов, когда меняется состояние гриппера (0 → 1 или 1 → 0). Это позволяет модели «внимательнее» учиться фазам захвата/отпуска.
+
+- В базовой модели (`conf/model/flow.yaml`) добавлены параметры:
+
+  ```yaml
+  use_gripper_motion_weights: false
+  gripper_motion_lambda: 3.0
+  gripper_motion_window: 2   # окно ±2 шага → 5 шагов вокруг смены
+  ```
+
+- Эксперимент `pointflowmatch_gripper_weighted` включает этот режим:
+
+  ```yaml
+  # conf/experiment/pointflowmatch_gripper_weighted.yaml
+  # @package _global_
+  defaults:
+    - override /model: flow
+
+  model:
+    use_gripper_motion_weights: true
+    gripper_motion_lambda: 3.0
+    gripper_motion_window: 2
+  ```
+
+- Для запуска такого обучения на Dexter есть отдельный sbatch:
+
+  ```bash
+  cd ~/point_flow_match/PointFlowMatch
+  conda activate ./pfp-train-env
+  sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
+  ```
+
+  Этот скрипт запускает:
+
+  ```bash
+  python scripts/train.py \
+      task_name=open_fridge \
+      +experiment=pointflowmatch_gripper_weighted \
+      dataloader.num_workers=8 \
+      dataloader.batch_size=128 \
+      log_wandb=False
+  ```
+
+Базовое обучение (`+experiment=pointflowmatch`) остаётся без временных весов (все шаги равны), а gripper-weighted эксперимент — это отдельный запуск, чекпоинты которого ложатся в свою папку `ckpt/<run_name>/`.
 
