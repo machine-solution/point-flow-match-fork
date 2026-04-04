@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Download and unpack the open_fridge demo dataset from Yandex Disk.
+# Download and unpack the *classic* open_fridge bundle: demos/sim/open_fridge/{train,valid}.
+# Public folder: https://disk.yandex.ru/d/Ssr_BffZItISOg (~4.3 GB as demos_open_fridge_sim.tar.gz).
+#
+# For two-phase train_pre_grasp + train_post_grasp, use:
+#   bash dexter/download_open_fridge_two_phase.sh
+#
 # The public share link resolves to a direct URL via the Yandex Disk API.
 #
 # Usage:

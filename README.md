@@ -165,6 +165,27 @@ Valid experiment names are the following, and they represent the different basel
 
 To train **two** policies—before and after the first gripper close—split demonstrations with `two_layers_planning/split_dataset_at_first_grasp.py`, then train with Hydra configs `train_open_fridge_pre_grasp` and `train_open_fridge_post_grasp`, or submit the Slurm scripts under `two_layers_planning/sbatch/`. Those configs use **`use_validation: false`**, so you only need the **train** zarr (no separate valid split). Step-by-step instructions (Russian), Yandex Disk links for pre-built archives, and environment notes: **`two_layers_planning/README.md`**.
 
+### `open_fridge` datasets: commands (cluster / VM)
+
+From the **repository root** (needs network, `python3`, `tar`):
+
+```bash
+# Baseline PointFlowMatch: train + valid (~4.3 GB one archive)
+bash dexter/download_dataset.sh
+
+# Two-phase policies: train_pre_grasp + train_post_grasp (two archives; large total size)
+bash dexter/download_open_fridge_two_phase.sh
+```
+
+Re-download: append `--force` to either script. On Slurm clusters, run these on a login node or an interactive allocation, not as an unattended one-line `sbatch` unless you know the job will finish (downloads can take a long time).
+
+| Goal | Result on disk | `valid`? |
+|------|----------------|----------|
+| Baseline (`run_pointflowmatch_open_fridge.sbatch`, etc.) | `demos/sim/open_fridge/train`, `valid` | yes |
+| Two-phase (`train_open_fridge_*_grasp` configs, `two_layers_planning/sbatch/…`) | `train_pre_grasp`, `train_post_grasp` | no |
+
+Alternatively: collect demos with `collect_demos.py`, or split `train` locally with `two_layers_planning/split_dataset_at_first_grasp.py` instead of `download_open_fridge_two_phase.sh`. More detail: **`two_layers_planning/README.md`**, **`dexter/README_pointflowmatch_dexter.md`** §2.
+
 ## Running training on Dexter (DGX A100)
 
 In the `dexter/` folder you can find helper files for running PointFlowMatch training on a Slurm‑managed DGX A100 cluster:
@@ -172,7 +193,9 @@ In the `dexter/` folder you can find helper files for running PointFlowMatch tra
 - `dexter/instruction.md` – short Russian introduction to Slurm on Dexter (queues, `sbatch`, how to read `.out/.err` logs).
 - `dexter/pfp_train_env.yml` – Conda environment for offline training (no CoppeliaSim / RLBench required).
 - `dexter/run_pointflowmatch_open_fridge.sbatch` – example Slurm script for training the PointFlowMatch baseline on the `open_fridge` task using existing demos.
-- `two_layers_planning/README.md` – **two-phase** `open_fridge` training (split dataset, pre/post configs, Slurm); alternative to the single-policy Dexter script above.
+- `dexter/download_dataset.sh` / `dexter/download_open_fridge_two_phase.sh` – download baseline or two-phase zarr from Yandex Disk (run from repo root).
+- `dexter/run_open_fridge_pre_grasp.sbatch`, `dexter/run_open_fridge_post_grasp.sbatch`, `dexter/run_open_fridge_two_phase_chain.sbatch` – Slurm training for two-phase `open_fridge` on Dexter (conda `pfp-train-env`).
+- `two_layers_planning/README.md` – two-phase workflow, split script, and **local** `.venv` sbatch under `two_layers_planning/sbatch/`.
 
 Typical workflow on Dexter:
 
@@ -187,9 +210,6 @@ conda env create -f dexter/pfp_train_env.yml -p ./pfp-train-env
 sbatch dexter/run_pointflowmatch_open_fridge.sbatch
 ```
 
-The training script expects demonstrations to be present under:
-
-- `demos/sim/open_fridge/train`
-- `demos/sim/open_fridge/valid`
+For **`dexter/run_pointflowmatch_open_fridge.sbatch`**, put data under `demos/sim/open_fridge/train` and `valid` (the sbatch may call `bash dexter/download_dataset.sh` if missing). For **two-phase** training on Dexter, run `bash dexter/download_open_fridge_two_phase.sh`, then e.g. `PRE=$(sbatch --parsable dexter/run_open_fridge_pre_grasp.sbatch)` and `sbatch --dependency=afterok:"$PRE" dexter/run_open_fridge_post_grasp.sbatch`, or use `dexter/run_open_fridge_two_phase_chain.sbatch` for one long job. See **`dexter/README_pointflowmatch_dexter.md`** §3.
 
 Large training data and checkpoints are **not** committed to this repository (see `.gitignore`); they should be stored locally on the cluster or downloaded separately.

@@ -94,29 +94,36 @@ python -c "import diffusion_policy; import pfp; print('OK')"
 > conda install -c pytorch3d pytorch3d
 > ```
 
-#### 2. Загрузка датасета `open_fridge`
+#### 2. Загрузка датасетов `open_fridge`
 
-Из корня репозитория `PointFlowMatch`:
+Всё качается **командами из корня репозитория** (нужны `python3`, `tar`, сеть). На Dexter делай это на **login-ноде или в интерактивной сессии** (`srun --pty bash` / выделенная задача), а не внутри короткого `sbatch` без интерактива — иначе неудобно следить за прогрессом.
+
+**Baseline — один архив `train` + `valid` (~4.3 ГБ):**
 
 ```bash
 cd ~/point_flow_match/PointFlowMatch
-
-# Если данных ещё нет:
 bash dexter/download_dataset.sh
+# повторно: bash dexter/download_dataset.sh --force
 ```
 
-Скрипт:
-- получает прямую ссылку на архив с Яндекс.Диска,
-- скачивает `demos_open_fridge_sim.tar.gz` (~4.3 ГБ),
-- распаковывает его в `demos/sim/open_fridge/`,
-- удаляет архив.
+**Двухфазное обучение — два архива `train_pre_grasp` + `train_post_grasp` (~2.5 + ~1.5 ГБ, суммарно больше места чем только baseline):**
 
-После выполнения должны существовать директории:
-
-```text
-demos/sim/open_fridge/train
-demos/sim/open_fridge/valid
+```bash
+cd ~/point_flow_match/PointFlowMatch
+bash dexter/download_open_fridge_two_phase.sh
+# повторно: bash dexter/download_open_fridge_two_phase.sh --force
 ```
+
+Скрипт `dexter/download_open_fridge_two_phase.sh` по очереди: API Яндекс.Диска → скачивание `train_pre_grasp.tar.gz` / `train_post_grasp.tar.gz` → распаковка в `demos/sim/open_fridge/train_pre_grasp` и `train_post_grasp` (через `dexter/extract_zarr_tarball.py`). Если каталог уже есть и в нём есть `data/` и `meta/`, шаг пропускается (кроме `--force`).
+
+Если не хочешь скачивать готовые pre/post, можно **разрезать** локально полный `train` после `download_dataset.sh`: `python two_layers_planning/split_dataset_at_first_grasp.py ...` (см. **`two_layers_planning/README.md`**).
+
+| Задача | Куда ложится zarr | Отдельный `valid` |
+|--------|-------------------|---------------------|
+| `run_pointflowmatch_open_fridge*.sbatch` | `demos/sim/open_fridge/train`, `valid` | нужен |
+| `two_layers_planning/sbatch/train_open_fridge_*_grasp.sbatch` | `train_pre_grasp`, `train_post_grasp` | не нужен (`use_validation: false`) |
+
+Ссылки на публичные шары (те же, что вшиты в скрипты): [полный сим-набор](https://disk.yandex.ru/d/Ssr_BffZItISOg), [pre](https://disk.yandex.ru/d/E81_4UbQiwAYpw), [post](https://disk.yandex.ru/d/OmzMhzSy0lGTMw).
 
 #### 3. Запуск обучения через Slurm
 
@@ -140,7 +147,24 @@ conda activate ./pfp-train-env
 sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
 ```
 
-**Двухфазное обучение (отдельные политики до и после первого захвата):** разрез датасета, ссылки на готовые архивы pre/post, запуск `sbatch two_layers_planning/sbatch/train_open_fridge_{pre,post}_grasp.sbatch` и ручной вызов `scripts/train.py` — см. **`two_layers_planning/README.md`** в корне репозитория. Для этих конфигов отдельный `valid` не нужен (`use_validation: false`).
+**Двухфазное обучение (pre, затем post)** — из корня репозитория, окружение `pfp-train-env` уже используется внутри `.sbatch` (как в `run_pointflowmatch_open_fridge.sbatch`):
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+bash dexter/download_open_fridge_two_phase.sh   # если ещё нет train_pre_grasp / train_post_grasp
+
+# Вариант A — две задачи подряд: post стартует только после успешного pre
+PRE=$(sbatch --parsable dexter/run_open_fridge_pre_grasp.sbatch)
+sbatch --dependency=afterok:"${PRE}" dexter/run_open_fridge_post_grasp.sbatch
+# то же самое: bash dexter/submit_open_fridge_post_after_pre.sh "$PRE"
+
+# Вариант B — одна длинная задача: pre и post в одном job (14 суток walltime)
+sbatch dexter/run_open_fridge_two_phase_chain.sbatch
+```
+
+Логи: `logs/pfm_open_fridge_pre_<JOB>.out`, `logs/pfm_open_fridge_post_<JOB>.out`, для цепочки — `logs/pfm_open_fridge_chain_<JOB>.out`. Чекпоинты: `ckpt/<run_name>/`; бэкап в `${HOME}/checkpoints/pointflowmatch_open_fridge_two_phase/` (переопределить: `export CKPT_BACKUP_DIR=...` перед `sbatch`).
+
+Локальная виртуалка без conda в репо — старые скрипты с `.venv`: `two_layers_planning/sbatch/train_open_fridge_*_grasp.sbatch`. Подробности: **`two_layers_planning/README.md`**.
 
 Проверить очередь и логи:
 
@@ -148,6 +172,7 @@ sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
 squeue -u <user>                     # статус задач
 ls logs/                             # файлы логов
 tail -f logs/pfm_open_fridge_<JOB>.out
+tail -f logs/pfm_open_fridge_pre_<JOB>.out
 ```
 
 Скрипт `run_pointflowmatch_open_fridge.sbatch`:
@@ -181,8 +206,12 @@ pip install -e . --no-deps
 cd ~/point_flow_match/PointFlowMatch
 git pull
 conda activate ./pfp-train-env
-bash dexter/download_dataset.sh      # если датасета ещё нет
+bash dexter/download_dataset.sh                 # baseline: train + valid
+bash dexter/download_open_fridge_two_phase.sh   # pre + post zarr для двухфазного обучения
 sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+# двухфазное (pre → post), см. §3 выше:
+# PRE=$(sbatch --parsable dexter/run_open_fridge_pre_grasp.sbatch)
+# sbatch --dependency=afterok:"$PRE" dexter/run_open_fridge_post_grasp.sbatch
 ```
 
 #### 5. Где лежат веса и как скачать на свою машину

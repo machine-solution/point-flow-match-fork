@@ -2,6 +2,22 @@
 
 Здесь — разрез исходного zarr по моменту первого закрытия гриппера и запуск обучения **двух отдельных политик**: pre-grasp и post-grasp. Отдельный **валидационный** датасет для этих конфигов не нужен: в `train_open_fridge_pre_grasp.yaml` / `train_open_fridge_post_grasp.yaml` включено `use_validation: false` (Composer не гоняет eval по эпохам).
 
+## Какие датасеты вообще бывают для `open_fridge`
+
+| Назначение | Каталоги / архивы |
+|------------|-------------------|
+| Классическое обучение одной политики (как в `dexter/run_pointflowmatch_open_fridge.sbatch`) | **`train`** + **`valid`** под `demos/sim/open_fridge/`. Скачивание одним архивом: `bash dexter/download_dataset.sh` из корня репо; публичная папка: [Я.Диск — полный сим-датасет](https://disk.yandex.ru/d/Ssr_BffZItISOg). |
+| Двухфазное обучение (этот документ) | **`train_pre_grasp`** и **`train_post_grasp`** — скачать скриптом или разрезать `train`. **`valid` не используется** для конфигов `train_open_fridge_*_grasp`. |
+
+**Скачать готовые pre/post с Яндекс.Диска (с кластера / виртуалки, из корня репо):**
+
+```bash
+cd /path/to/PointFlowMatch
+bash dexter/download_open_fridge_two_phase.sh
+```
+
+Перекачать с нуля: `bash dexter/download_open_fridge_two_phase.sh --force`. Подробности и интерактив на Dexter: **`dexter/README_pointflowmatch_dexter.md`** §2.
+
 ## Что нужно в окружении
 
 - Установленный PointFlowMatch (`pip install -e .` из корня репозитория).
@@ -35,16 +51,15 @@ python two_layers_planning/split_dataset_at_first_grasp.py \
 
 Рядом с `train_pre_grasp` создаётся манифест `train_pre_grasp_split_manifest.json` со статистикой разреза.
 
-## 2. Готовые архивы (train pre / post)
+## 2. Готовые архивы pre / post (без локального разреза)
 
-Если не режете сами, можно скачать уже разрезанные train-датасеты:
+Не входят в `demos_open_fridge_sim.tar.gz` из `dexter/download_dataset.sh` — отдельные шары, но скачиваются **одной командой**:
 
-| Фаза | Яндекс.Диск |
-|------|-------------|
-| **pre-grasp** | https://disk.yandex.ru/d/E81_4UbQiwAYpw |
-| **post-grasp** | https://disk.yandex.ru/d/OmzMhzSy0lGTMw |
+```bash
+bash dexter/download_open_fridge_two_phase.sh
+```
 
-Распакуйте так, чтобы у выбранного каталога был подкаталог **`data/`** (zarr), как у обычного `demos/sim/.../train`.
+Внутри — два файла `train_pre_grasp.tar.gz` и `train_post_grasp.tar.gz` (ссылки: [pre](https://disk.yandex.ru/d/E81_4UbQiwAYpw), [post](https://disk.yandex.ru/d/OmzMhzSy0lGTMw)); распаковка в `demos/sim/open_fridge/train_pre_grasp` и `train_post_grasp`.
 
 ## 3. Запуск обучения вручную (не Slurm)
 
@@ -72,16 +87,27 @@ python scripts/train.py --config-path=conf --config-name=train_open_fridge_post_
 
 ## 4. Запуск на кластере (Slurm)
 
-Из **корня** PointFlowMatch:
+**Dexter / conda-окружение в репо (`./pfp-train-env`)** — используйте скрипты в **`dexter/`** (как `run_pointflowmatch_open_fridge.sbatch`): там уже `conda activate`, загрузка данных и бэкап чекпоинтов.
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+bash dexter/download_open_fridge_two_phase.sh
+
+PRE=$(sbatch --parsable dexter/run_open_fridge_pre_grasp.sbatch)
+sbatch --dependency=afterok:"${PRE}" dexter/run_open_fridge_post_grasp.sbatch
+# одной задачей подряд: sbatch dexter/run_open_fridge_two_phase_chain.sbatch
+```
+
+Подробно: **`dexter/README_pointflowmatch_dexter.md`** §3.
+
+**Локально / `.venv` в корне репо** — без conda:
 
 ```bash
 sbatch two_layers_planning/sbatch/train_open_fridge_pre_grasp.sbatch
 sbatch two_layers_planning/sbatch/train_open_fridge_post_grasp.sbatch
 ```
 
-Скрипты по умолчанию вызывают **`.venv/bin/python`** в корне репозитория. Если на кластере используете только Conda (без `.venv`), замените в sbatch на свой интерпретатор, например `python` из активированного окружения (как в `dexter/README_pointflowmatch_dexter.md`).
-
-Переопределение путей к zarr:
+Там вызывается **`.venv/bin/python`**. Переопределение путей:
 
 ```bash
 export PFP_TRAIN_PRE=/path/to/train_pre_grasp
@@ -91,7 +117,7 @@ export PFP_TRAIN_POST=/path/to/train_post_grasp
 sbatch two_layers_planning/sbatch/train_open_fridge_post_grasp.sbatch
 ```
 
-Проверяется наличие `$PFP_TRAIN_*/data`. Имя рана: `open_fridge_pre_<SLURM_JOB_ID>` / `open_fridge_post_<SLURM_JOB_ID>`.
+Проверяется наличие `$PFP_TRAIN_*/data`. Имя рана в `two_layers/.../sbatch`: `open_fridge_pre_<SLURM_JOB_ID>` / `open_fridge_post_<SLURM_JOB_ID>`.
 
 ## 5. Чекпоинты и общие настройки
 
@@ -103,6 +129,8 @@ sbatch two_layers_planning/sbatch/train_open_fridge_post_grasp.sbatch
 
 | Файл | Назначение |
 |------|------------|
+| `dexter/download_open_fridge_two_phase.sh` | Скачать с Я.Диска `train_pre_grasp` + `train_post_grasp` |
+| `dexter/run_open_fridge_pre_grasp.sbatch` / `post` / `two_phase_chain` | Slurm на Dexter (conda) |
 | `two_layers_planning/split_dataset_at_first_grasp.py` | Разрез zarr по первому захвату |
 | `conf/train_open_fridge_pre_grasp.yaml` | Конфиг Hydra: pre, без valid |
 | `conf/train_open_fridge_post_grasp.yaml` | Конфиг Hydra: post, без valid |
