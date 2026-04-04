@@ -287,16 +287,22 @@ def main(cfg: OmegaConf):
 
     _log_memory_usage(cfg, composer_model, optimizer, dataset_train)
 
-    wandb_logger = WandBLogger(
-        project="pfp-train-fixed",
-        entity="rl-lab-chisari",
-        init_kwargs={
-            "config": OmegaConf.to_container(cfg),
-            "mode": "online" if cfg.log_wandb else "disabled",
-        },
-    )
-    print("[memory] after wandb_logger")
-    _log_gpu_memory("after wandb_logger")
+    # При log_wandb=False нельзя передавать WandBLogger(..., mode=disabled): Composer всё равно
+    # дергает artifact download при autoresume → RuntimeError до init wandb.
+    loggers = []
+    if cfg.log_wandb:
+        loggers.append(
+            WandBLogger(
+                project="pfp-train-fixed",
+                entity="rl-lab-chisari",
+                init_kwargs={
+                    "config": OmegaConf.to_container(cfg),
+                    "mode": "online",
+                },
+            )
+        )
+    print("[memory] after loggers setup")
+    _log_gpu_memory("after loggers setup")
 
     print("[memory] >>> about to call Trainer(...)")
     _log_gpu_memory(">>> right before Trainer()")
@@ -319,7 +325,7 @@ def main(cfg: OmegaConf):
         schedulers=lr_scheduler,
         step_schedulers_every_batch=True,
         device="gpu" if DEVICE.type == "cuda" else "cpu",
-        loggers=[wandb_logger],
+        loggers=loggers,
         callbacks=train_callbacks,
         save_folder="ckpt/{run_name}",
         save_interval=f"{cfg.save_each_n_epochs}ep",
@@ -334,7 +340,8 @@ def main(cfg: OmegaConf):
     print("[memory] <<< Trainer() returned")
     _log_gpu_memory("<<< after Trainer()")
 
-    wandb.watch(composer_model)
+    if cfg.log_wandb:
+        wandb.watch(composer_model)
     # Save the used cfg for inference (same absolute path as checkpoints)
     ckpt_run_dir = REPO_DIRS.CKPT / trainer.state.run_name
     ckpt_run_dir.mkdir(parents=True, exist_ok=True)
@@ -346,7 +353,8 @@ def main(cfg: OmegaConf):
     print("[memory] <<< trainer.fit() returned")
     _log_gpu_memory("<<< after fit()")
     run_name = trainer.state.run_name
-    wandb.finish()
+    if cfg.log_wandb:
+        wandb.finish()
     trainer.close()
 
     if getattr(cfg, "launch_eval_after_train", True) and "CUDA_VISIBLE_DEVICES" in os.environ:
