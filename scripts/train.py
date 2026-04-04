@@ -1,5 +1,6 @@
 import os
 import shutil
+from pathlib import Path
 import hydra
 import wandb
 import subprocess
@@ -107,6 +108,52 @@ class ResourceMonitorCallback(Callback):
         print("\n".join(lines))
 
 
+class MilestoneCheckpointCopyCallback(Callback):
+    """
+    После сохранения Composer копирует файл эпохи N в milestone_ep{N}.pt
+    (rolling save_num_checkpoints_to_keep их не трогает — это отдельные копии).
+    """
+
+    def __init__(self, milestones: list[int]):
+        self.milestones = set(int(x) for x in milestones)
+
+    def run_event(self, event: Event, state, logger):
+        if event != Event.EPOCH_END:
+            return
+        epoch = int(state.timestamp.epoch)
+        if epoch not in self.milestones:
+            return
+        run_name = getattr(state, "run_name", None)
+        if not run_name:
+            print(f"[milestone] skip: no state.run_name at epoch {epoch}")
+            return
+        ckpt_dir = REPO_DIRS.CKPT / str(run_name)
+        if not ckpt_dir.is_dir():
+            print(f"[milestone] skip: missing dir {ckpt_dir}")
+            return
+        matches = sorted(ckpt_dir.glob(f"ep{epoch:05d}*.pt"))
+        if not matches:
+            matches = sorted(ckpt_dir.glob(f"ep{epoch}*.pt"))
+        if not matches:
+            print(f"[milestone] no checkpoint file for epoch {epoch} in {ckpt_dir}")
+            return
+        src = matches[-1]
+        dst = ckpt_dir / f"milestone_ep{epoch}.pt"
+        shutil.copy2(src, dst)
+        print(f"[milestone] saved {dst} (from {src.name})")
+
+
+def _resolve_dataset_path(cfg: OmegaConf, *, train: bool) -> Path:
+    key = "dataset_path_train" if train else "dataset_path_valid"
+    override = getattr(cfg, key, None)
+    if override is not None:
+        s = str(override).strip()
+        if s and s.lower() not in ("null", "none", "~"):
+            return Path(s).expanduser().resolve()
+    sub = "train" if train else "valid"
+    return (DATA_DIRS.PFP / cfg.task_name / sub).resolve()
+
+
 def _log_memory_usage(cfg: OmegaConf, composer_model: ComposerModel, optimizer, dataset_train):
     """Log model size, optimizer/EMA footprint, and one sample size (no dataloader iteration)."""
     n_params = sum(p.numel() for p in composer_model.parameters())
@@ -160,17 +207,29 @@ def main(cfg: OmegaConf):
     print(OmegaConf.to_yaml(cfg))
     set_seeds(cfg.seed)
 
-    data_path_train = DATA_DIRS.PFP / cfg.task_name / "train"
-    data_path_valid = DATA_DIRS.PFP / cfg.task_name / "valid"
+    use_val = bool(getattr(cfg, "use_validation", True))
+    data_path_train = _resolve_dataset_path(cfg, train=True)
+    print(f"[data] train: {data_path_train}")
+    if use_val:
+        data_path_valid = _resolve_dataset_path(cfg, train=False)
+        print(f"[data] valid: {data_path_valid}")
+    else:
+        data_path_valid = None
+        print("[data] valid: (disabled, use_validation=false)")
+
     if cfg.obs_mode == "pcd":
         dataset_train = RobotDatasetPcd(data_path_train, **cfg.dataset)
-        dataset_valid = RobotDatasetPcd(data_path_valid, **cfg.dataset)
+        dataset_valid = (
+            RobotDatasetPcd(data_path_valid, **cfg.dataset) if use_val else None
+        )
     elif cfg.obs_mode == "rgb":
         dataset_train = RobotDatasetImages(data_path_train, **cfg.dataset)
-        dataset_valid = RobotDatasetImages(data_path_valid, **cfg.dataset)
+        dataset_valid = (
+            RobotDatasetImages(data_path_valid, **cfg.dataset) if use_val else None
+        )
     else:
         raise ValueError(f"Unknown observation mode: {cfg.obs_mode}")
-    print("[memory] after dataset_train, dataset_valid")
+    print("[memory] after dataset_train" + (", dataset_valid" if use_val else ""))
     _log_gpu_memory("after datasets")
 
     dataloader_train = DataLoader(
@@ -179,13 +238,17 @@ def main(cfg: OmegaConf):
         **cfg.dataloader,
         persistent_workers=True if cfg.dataloader.num_workers > 0 else False,
     )
-    dataloader_valid = DataLoader(
-        dataset_valid,
-        shuffle=False,
-        **cfg.dataloader,
-        persistent_workers=True if cfg.dataloader.num_workers > 0 else False,
+    dataloader_valid = (
+        DataLoader(
+            dataset_valid,
+            shuffle=False,
+            **cfg.dataloader,
+            persistent_workers=True if cfg.dataloader.num_workers > 0 else False,
+        )
+        if use_val
+        else None
     )
-    print("[memory] after dataloader_train, dataloader_valid")
+    print("[memory] after dataloader_train" + (", dataloader_valid" if use_val else ""))
     _log_gpu_memory("after dataloaders")
 
     composer_model: ComposerModel = hydra.utils.instantiate(cfg.model)
@@ -238,6 +301,15 @@ def main(cfg: OmegaConf):
     print("[memory] >>> about to call Trainer(...)")
     _log_gpu_memory(">>> right before Trainer()")
 
+    train_callbacks = [
+        LRMonitor(),
+        MemoryProfileCallback(),
+        ResourceMonitorCallback(path_to_check=str(REPO_DIRS.ROOT)),
+    ]
+    _ms = getattr(cfg, "checkpoint_milestones", None)
+    if _ms:
+        train_callbacks.append(MilestoneCheckpointCopyCallback(list(OmegaConf.to_container(_ms, resolve=True))))
+
     trainer = Trainer(
         model=composer_model,
         train_dataloader=dataloader_train,
@@ -248,11 +320,7 @@ def main(cfg: OmegaConf):
         step_schedulers_every_batch=True,
         device="gpu" if DEVICE.type == "cuda" else "cpu",
         loggers=[wandb_logger],
-        callbacks=[
-            LRMonitor(),
-            MemoryProfileCallback(),
-            ResourceMonitorCallback(path_to_check=str(REPO_DIRS.ROOT)),
-        ],
+        callbacks=train_callbacks,
         save_folder="ckpt/{run_name}",
         save_interval=f"{cfg.save_each_n_epochs}ep",
         save_num_checkpoints_to_keep=3,
@@ -281,15 +349,16 @@ def main(cfg: OmegaConf):
     wandb.finish()
     trainer.close()
 
-    _ = subprocess.Popen(
-        [
-            "bash",
-            "bash/start_eval.sh",
-            f"{os.environ['CUDA_VISIBLE_DEVICES']}",
-            f"{run_name}",
-        ],
-        start_new_session=True,
-    )
+    if getattr(cfg, "launch_eval_after_train", True) and "CUDA_VISIBLE_DEVICES" in os.environ:
+        _ = subprocess.Popen(
+            [
+                "bash",
+                "bash/start_eval.sh",
+                f"{os.environ['CUDA_VISIBLE_DEVICES']}",
+                f"{run_name}",
+            ],
+            start_new_session=True,
+        )
     return
 
 

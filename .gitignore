@@ -10,5 +10,30 @@
 *.svg
 
 /venv
+/.venv/
+/pfp-train-env/
+
 *.tar.xz
 *.tar.gz
+*.zip
+
+# Записи политик, логи валидации, служебные логи
+/recordings/
+/results/
+/logs/
+**/slurm-*.out
+**/slurm-*.err
+
+# CoppeliaSim: локальное состояние установки (не переносить между машинами)
+CoppeliaSim_Edu_V4_1_0_Ubuntu20_04/system/settings.dat
+CoppeliaSim_Edu_V4_1_0_Ubuntu20_04/updtChck.dat
+
+# Временные каталоги
+/tmp/
+/temp/
+/scratch/
+
+# Тесты / инструменты
+.pytest_cache/
+.coverage
+htmlcov/

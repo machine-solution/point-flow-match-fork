@@ -9,10 +9,21 @@ n_obs_steps: 2
 n_pred_steps: 32  # Must be divisible by 4
 use_ema: True
 save_each_n_epochs: 100
+# Дополнительно к rolling save_num_checkpoints_to_keep копии в ckpt/<run_name>/milestone_ep{N}.pt
+checkpoint_milestones: [500, 1000]
 obs_mode: pcd  # pcd | rgb
 run_name: null  # optional explicit run name for this training run (no autoresume)
 resume_from_ckpt_name: null  # if set, initialize model weights from ckpt/<name>/*
 resume_from_ckpt_episode: latest  # e.g. latest, ep500, ep1000
+
+# Если заданы, используются вместо demos/sim/<task_name>/{train,valid}
+dataset_path_train: null
+dataset_path_valid: null
+# false → не грузим valid, eval_dataloader=None (Composer не гоняет eval по эпохам)
+use_validation: true
+
+# После trainer.fit() запустить bash/start_eval.sh (на кластере обычно выключить)
+launch_eval_after_train: true
 
 
 # env_runner:

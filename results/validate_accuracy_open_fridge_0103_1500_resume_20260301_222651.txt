@@ -1,1 +1,0 @@
-./bash/run_validate_accuracy.sh: line 39: python: command not found

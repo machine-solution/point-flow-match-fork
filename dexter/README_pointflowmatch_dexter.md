@@ -140,6 +140,8 @@ conda activate ./pfp-train-env
 sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
 ```
 
+**Двухфазное обучение (отдельные политики до и после первого захвата):** разрез датасета, ссылки на готовые архивы pre/post, запуск `sbatch two_layers_planning/sbatch/train_open_fridge_{pre,post}_grasp.sbatch` и ручной вызов `scripts/train.py` — см. **`two_layers_planning/README.md`** в корне репозитория. Для этих конфигов отдельный `valid` не нужен (`use_validation: false`).
+
 Проверить очередь и логи:
 
 ```bash

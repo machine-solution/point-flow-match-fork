@@ -161,6 +161,10 @@ Valid task names are all those supported by RLBench. In this work, we used the f
 
 Valid experiment names are the following, and they represent the different baselines we tested: `adaflow`, `diffusion_policy`, `dp3`, `pointflowmatch`, `pointflowmatch_images`, `pointflowmatch_ddim`, `pointflowmatch_so3`.
 
+### Two-phase training for `open_fridge` (pre / post first grasp)
+
+To train **two** policies—before and after the first gripper close—split demonstrations with `two_layers_planning/split_dataset_at_first_grasp.py`, then train with Hydra configs `train_open_fridge_pre_grasp` and `train_open_fridge_post_grasp`, or submit the Slurm scripts under `two_layers_planning/sbatch/`. Those configs use **`use_validation: false`**, so you only need the **train** zarr (no separate valid split). Step-by-step instructions (Russian), Yandex Disk links for pre-built archives, and environment notes: **`two_layers_planning/README.md`**.
+
 ## Running training on Dexter (DGX A100)
 
 In the `dexter/` folder you can find helper files for running PointFlowMatch training on a Slurm‑managed DGX A100 cluster:
@@ -168,6 +172,7 @@ In the `dexter/` folder you can find helper files for running PointFlowMatch tra
 - `dexter/instruction.md` – short Russian introduction to Slurm on Dexter (queues, `sbatch`, how to read `.out/.err` logs).
 - `dexter/pfp_train_env.yml` – Conda environment for offline training (no CoppeliaSim / RLBench required).
 - `dexter/run_pointflowmatch_open_fridge.sbatch` – example Slurm script for training the PointFlowMatch baseline on the `open_fridge` task using existing demos.
+- `two_layers_planning/README.md` – **two-phase** `open_fridge` training (split dataset, pre/post configs, Slurm); alternative to the single-policy Dexter script above.
 
 Typical workflow on Dexter:
 

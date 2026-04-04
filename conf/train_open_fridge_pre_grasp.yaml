@@ -1,0 +1,14 @@
+# Обучение модели фазы до первого захвата (pre-grasp).
+# Датасет train: распаковать с Я.Диска (пре) в dataset_path_train ниже или передать из sbatch.
+# https://disk.yandex.ru/d/E81_4UbQiwAYpw
+#
+defaults:
+  - train
+  - _self_
+
+task_name: open_fridge
+run_name: null
+launch_eval_after_train: false
+use_validation: false
+
+dataset_path_train: null

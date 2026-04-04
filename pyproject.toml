@@ -37,7 +37,8 @@ dependencies = [
     "wandb<=0.17.3",
     "yourdfpy==0.0.56",
     "geomstats[pytorch]==2.7.0",
-    "imagecodecs"
+    "imagecodecs",
+    "pypose"
 ]
 
 
