@@ -69,13 +69,13 @@ bash dexter/download_open_fridge_two_phase.sh
 export PYTHONPATH="${PWD}:${PWD}/../diffusion_policy${PYTHONPATH:+:$PYTHONPATH}"
 
 # Pre-grasp
-python scripts/train.py --config-path=conf --config-name=train_open_fridge_pre_grasp \
+python scripts/train.py --config-name=train_open_fridge_pre_grasp \
   dataset_path_train=/abs/path/to/train_pre_grasp \
   run_name=my_pre_run \
   dataloader.num_workers=8
 
 # Post-grasp
-python scripts/train.py --config-path=conf --config-name=train_open_fridge_post_grasp \
+python scripts/train.py --config-name=train_open_fridge_post_grasp \
   dataset_path_train=/abs/path/to/train_post_grasp \
   run_name=my_post_run \
   dataloader.num_workers=8

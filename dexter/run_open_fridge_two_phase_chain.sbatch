@@ -50,7 +50,6 @@ PRE_JOB="${SLURM_JOB_ID}"
 RUN_PRE="open_fridge_pre_${PRE_JOB}_chain"
 echo "=== [1/2] Pre-grasp run_name=${RUN_PRE} ==="
 python scripts/train.py \
-  --config-path=conf \
   --config-name=train_open_fridge_pre_grasp \
   dataset_path_train="${PFP_PRE}" \
   run_name="${RUN_PRE}" \
@@ -66,7 +65,6 @@ fi
 RUN_POST="open_fridge_post_${PRE_JOB}_chain"
 echo "=== [2/2] Post-grasp run_name=${RUN_POST} ==="
 python scripts/train.py \
-  --config-path=conf \
   --config-name=train_open_fridge_post_grasp \
   dataset_path_train="${PFP_POST}" \
   run_name="${RUN_POST}" \

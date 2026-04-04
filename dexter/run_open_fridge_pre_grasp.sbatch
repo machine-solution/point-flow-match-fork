@@ -67,7 +67,6 @@ df -h . /tmp 2>/dev/null || df -h .
 
 echo "=== Training pre-grasp run_name=${RUN_NAME} ==="
 python scripts/train.py \
-  --config-path=conf \
   --config-name=train_open_fridge_pre_grasp \
   dataset_path_train="${PFP_TRAIN_PRE}" \
   run_name="${RUN_NAME}" \

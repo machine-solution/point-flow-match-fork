@@ -65,7 +65,6 @@ df -h . /tmp 2>/dev/null || df -h .
 
 echo "=== Training post-grasp run_name=${RUN_NAME} ==="
 python scripts/train.py \
-  --config-path=conf \
   --config-name=train_open_fridge_post_grasp \
   dataset_path_train="${PFP_TRAIN_POST}" \
   run_name="${RUN_NAME}" \
