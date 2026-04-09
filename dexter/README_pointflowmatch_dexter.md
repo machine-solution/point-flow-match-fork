@@ -154,8 +154,8 @@ cd ~/point_flow_match/PointFlowMatch
 bash dexter/download_open_fridge_two_phase.sh   # если ещё нет train_pre_grasp / train_post_grasp
 
 # Вариант A — две задачи подряд: post стартует только после успешного pre
-PRE=$(sbatch --parsable dexter/run_open_fridge_pre_grasp.sbatch)
-sbatch --dependency=afterok:"${PRE}" dexter/run_open_fridge_post_grasp.sbatch
+sbatch dexter/run_open_fridge_pre_grasp.sbatch
+sbatch dexter/run_open_fridge_post_grasp.sbatch
 # то же самое: bash dexter/submit_open_fridge_post_after_pre.sh "$PRE"
 
 # Вариант B — одна длинная задача: pre и post в одном job (14 суток walltime)
