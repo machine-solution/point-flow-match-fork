@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
 Разбивает zarr-датасет демонстраций (RobotReplayBuffer / diffusion_policy ReplayBuffer)
-на два датасета по первому захвату (гриппер закрыт).
+на два датасета по захвату (гриппер закрыт), с опцией "устойчивого закрытия".
 
-  • pre (до и включая первый кадр захвата): кадры [0 .. t]  → срез [: t + 1]
-  • post (от первого захвата): кадры [t .. T-1]           → срез [t :]
+Определение "кадр захвата":
+  - находим первый индекс t, где gripper < thr
+  - если указать --closed-steps N>1, то ищем первый индекс t,
+    где gripper < thr сохраняется N шагов подряд, и берём t как
+    *последний* кадр этой устойчивой последовательности (т.е. в окно входит t-N+1..t).
+
+  • pre (до и включая кадр захвата): кадры [0 .. t]  → срез [: t + 1]
+  • post (от кадра захвата): кадры [t .. T-1]        → срез [t :]
 
 Кадр с индексом t входит в ОБА датасета.
 
@@ -38,13 +44,36 @@ if _DP.is_dir() and str(_DP) not in sys.path:
 from pfp.data.replay_buffer import RobotReplayBuffer
 
 
-def first_grasp_index(robot_state: np.ndarray, *, thr: float) -> int | None:
-    """Первый шаг, где gripper < thr (индекс 9 в robot_state). Если закрытия нет — None."""
+def first_grasp_index(
+    robot_state: np.ndarray, *, thr: float, closed_steps: int = 1
+) -> int | None:
+    """
+    Первый индекс t, который считается "захватом".
+
+    - closed_steps=1: первый шаг, где gripper < thr.
+    - closed_steps=N>1: первый шаг, где gripper < thr держится N шагов подряд.
+      Возвращаем t = (start + N - 1), т.е. индекс ПОСЛЕДНЕГО кадра устойчивого окна.
+    """
+    closed_steps = int(closed_steps)
+    if closed_steps < 1:
+        raise ValueError(f"closed_steps must be >= 1, got {closed_steps}")
     g = np.asarray(robot_state, dtype=np.float64)[:, 9].ravel()
     closed = g < thr
-    if not np.any(closed):
+    T = int(closed.shape[0])
+    if T == 0:
         return None
-    return int(np.argmax(closed))
+    if closed_steps == 1:
+        if not np.any(closed):
+            return None
+        return int(np.argmax(closed))
+
+    # Find first window of length N with all True, return last index of that window.
+    # This is O(T*N) but T is small (episode length) so it's fine and explicit.
+    N = closed_steps
+    for start in range(0, T - N + 1):
+        if bool(np.all(closed[start : start + N])):
+            return int(start + N - 1)
+    return None
 
 
 def _episode_slice(ep: dict[str, np.ndarray], start: int, stop: int) -> dict[str, np.ndarray]:
@@ -86,6 +115,15 @@ def main() -> None:
         help="Порог: значение gripper (канал 9) < thr считается закрытым",
     )
     ap.add_argument(
+        "--closed-steps",
+        type=int,
+        default=1,
+        help=(
+            "Сколько шагов подряд gripper должен быть < thr, чтобы считать захват устойчивым. "
+            "1 = как раньше (первое закрытие). 3 = 'устойчивое закрытие' как в TwoPhasePolicy."
+        ),
+    )
+    ap.add_argument(
         "--overwrite",
         action="store_true",
         help="Удалить output-pre / output-post, если они уже существуют",
@@ -96,6 +134,7 @@ def main() -> None:
     out_pre = args.output_pre.expanduser().resolve()
     out_post = args.output_post.expanduser().resolve()
     thr = float(args.gripper_thr)
+    closed_steps = int(args.closed_steps)
 
     if not inp.is_dir():
         raise FileNotFoundError(f"Нет каталога: {inp}")
@@ -122,6 +161,7 @@ def main() -> None:
         "output_post": str(out_post),
         "n_source_episodes": n_ep,
         "gripper_thr": thr,
+        "closed_steps": closed_steps,
         "pre_episodes": 0,
         "post_episodes": 0,
         "no_grasp_pre_only": 0,
@@ -143,7 +183,7 @@ def main() -> None:
 
         rs = ep["robot_state"]
         T = int(rs.shape[0])
-        t = first_grasp_index(rs, thr=thr)
+        t = first_grasp_index(rs, thr=thr, closed_steps=closed_steps)
 
         if t is None:
             rb_pre.add_episode(_episode_slice(ep, 0, T))
@@ -162,7 +202,8 @@ def main() -> None:
         rb_post.add_episode(post)
         stats["post_episodes"] += 1
 
-    manifest_path = out_pre.parent / f"{out_pre.name}_split_manifest.json"
+    suffix = f"_stable{closed_steps}" if closed_steps != 1 else ""
+    manifest_path = out_pre.parent / f"{out_pre.name}{suffix}_split_manifest.json"
     manifest_path.write_text(json.dumps(stats, indent=2), encoding="utf-8")
 
     print(

@@ -17,6 +17,7 @@ class RLBenchRunnerPlayback:
         self,
         input_file: str,
         env_config: dict,
+        episode_indices: list[int] | None = None,
         verbose=False,
     ) -> None:
         # Force visualization mode for playback
@@ -40,6 +41,18 @@ class RLBenchRunnerPlayback:
         
         self.num_episodes = self.recorded_data["num_episodes"]
         self.recorded_episodes = self.recorded_data["episodes"]
+        self.episode_indices = episode_indices
+
+        if self.episode_indices is not None:
+            keep: list[tuple[int, dict]] = []
+            for idx in self.episode_indices:
+                if 0 <= int(idx) < len(self.recorded_episodes):
+                    keep.append((int(idx), self.recorded_episodes[int(idx)]))
+                else:
+                    print(f"Warning: requested episode index out of range: {idx}")
+            self.recorded_episodes = [ep for _, ep in keep]
+            self.episode_indices = [idx for idx, _ in keep]
+            print(f"Filtering to episodes: {self.episode_indices}")
         
         print(f"Loaded {self.num_episodes} episodes from {self.input_file}")
         print("Playing back with visualization (GUI mode)")
@@ -57,7 +70,12 @@ class RLBenchRunnerPlayback:
         
         import time
         
-        for episode_idx, episode_data in enumerate(tqdm(self.recorded_episodes, desc="Playback")):
+        for local_idx, episode_data in enumerate(tqdm(self.recorded_episodes, desc="Playback")):
+            episode_idx = (
+                int(self.episode_indices[local_idx])
+                if self.episode_indices is not None
+                else int(local_idx)
+            )
             self.env.reset()
             # Give CoppeliaSim time to fully initialize after reset
             time.sleep(1.0)
@@ -65,9 +83,12 @@ class RLBenchRunnerPlayback:
             actions = episode_data["actions"]
             recorded_success = episode_data["success"]
             recorded_steps = episode_data["steps"]
+            switch_step = episode_data.get("switch_step", None)
             
             for step, action in enumerate(actions):
                 try:
+                    if switch_step is not None and int(switch_step) == int(step) and self.verbose:
+                        print(f"[handoff] episode {episode_idx}: switch pre->post at step {step}")
                     # Convert action from list to numpy array
                     next_robot_state = np.array(action, dtype=np.float32)
                     

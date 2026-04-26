@@ -5,8 +5,8 @@
 # Из корня репозитория:
 #   sbatch dexter/run_open_fridge_pre_grasp.sbatch
 #
-# Датасет: demos/sim/open_fridge/train_pre_grasp (zarr: data/ + meta/).
-# Если нет — скрипт вызовет dexter/download_open_fridge_two_phase.sh (качает pre и post).
+# Датасет (stable3): demos/sim/open_fridge/train_pre_grasp_stable3 (zarr: data/ + meta/).
+# Если нет — скрипт вызовет dexter/download_open_fridge_two_phase.sh --stable3 (качает pre и post).
 #
 # Затем post-модель: dexter/run_open_fridge_post_grasp.sbatch
 #   или цепочка: sbatch dexter/run_open_fridge_two_phase_chain.sbatch
@@ -44,14 +44,14 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
 echo "=== nvidia-smi ==="
 nvidia-smi || true
 
-PFP_TRAIN_PRE="${PFP_TRAIN_PRE:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_pre_grasp}"
+PFP_TRAIN_PRE="${PFP_TRAIN_PRE:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_pre_grasp_stable3}"
 PRE_DATA="${PFP_TRAIN_PRE}/data"
 
 if [[ ! -d "${PRE_DATA}" ]]; then
-  echo "=== Downloading pre/post datasets (dexter/download_open_fridge_two_phase.sh) ==="
-  bash dexter/download_open_fridge_two_phase.sh
+  echo "=== Downloading stable3 pre/post datasets (dexter/download_open_fridge_two_phase.sh --stable3) ==="
+  bash dexter/download_open_fridge_two_phase.sh --stable3
 else
-  echo "=== train_pre_grasp already present, skipping download ==="
+  echo "=== train_pre_grasp_stable3 already present, skipping download ==="
 fi
 
 if [[ ! -d "${PRE_DATA}" ]]; then

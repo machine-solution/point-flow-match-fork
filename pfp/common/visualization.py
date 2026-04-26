@@ -9,10 +9,14 @@ try:
     import rerun as rr
 except ImportError:
     print("WARNING: Rerun not installed. Visualization will not work.")
+    rr = None
 
 
 class RerunViewer:
     def __init__(self, name: str, addr: str = None):
+        if rr is None:
+            # Allow the rest of the codebase to run without rerun installed.
+            return
         rr.init(name)
         if addr is None:
             addr = "127.0.0.1"
@@ -23,6 +27,8 @@ class RerunViewer:
 
     @staticmethod
     def add_obs_dict(obs_dict: dict, timestep: int = None):
+        if rr is None:
+            return
         if timestep is not None:
             rr.set_time_sequence("timestep", timestep)
         RerunViewer.add_rgb("rgb", obs_dict["image"])
@@ -36,6 +42,8 @@ class RerunViewer:
 
     @staticmethod
     def add_o3d_pointcloud(name: str, pointcloud: o3d.geometry.PointCloud, radii: float = None):
+        if rr is None:
+            return
         points = np.asanyarray(pointcloud.points)
         colors = np.asanyarray(pointcloud.colors) if pointcloud.has_colors() else None
         colors_uint8 = (colors * 255).astype(np.uint8) if pointcloud.has_colors() else None
@@ -46,23 +54,31 @@ class RerunViewer:
     def add_np_pointcloud(
         name: str, points: np.ndarray, colors_uint8: np.ndarray = None, radii: float = None
     ):
+        if rr is None:
+            return
         rr_points = rr.Points3D(positions=points, colors=colors_uint8, radii=radii)
         rr.log(name, rr_points)
         return
 
     @staticmethod
     def add_axis(name: str, pose: np.ndarray, size: float = 0.004, timeless: bool = False):
+        if rr is None:
+            return
         mesh = trimesh.creation.axis(origin_size=size, transform=pose)
         RerunViewer.add_mesh_trimesh(name, mesh, timeless)
         return
 
     @staticmethod
     def add_aabb(name: str, centers: np.ndarray, extents: np.ndarray, timeless=False):
+        if rr is None:
+            return
         rr.log(name, rr.Boxes3D(centers=centers, sizes=extents), timeless=timeless)
         return
 
     @staticmethod
     def add_mesh_trimesh(name: str, mesh: trimesh.Trimesh, timeless: bool = False):
+        if rr is None:
+            return
         # Handle colors
         if mesh.visual.kind in ["vertex", "face"]:
             vertex_colors = mesh.visual.vertex_colors
@@ -82,12 +98,16 @@ class RerunViewer:
 
     @staticmethod
     def add_mesh_list_trimesh(name: str, meshes: list[trimesh.Trimesh]):
+        if rr is None:
+            return
         for i, mesh in enumerate(meshes):
             RerunViewer.add_mesh_trimesh(name + f"/{i}", mesh)
         return
 
     @staticmethod
     def add_rgb(name: str, rgb_uint8: np.ndarray):
+        if rr is None:
+            return
         if rgb_uint8.shape[0] == 3:
             # CHW -> HWC
             rgb_uint8 = np.transpose(rgb_uint8, (1, 2, 0))
@@ -95,10 +115,14 @@ class RerunViewer:
 
     @staticmethod
     def add_depth(name: str, detph: np.ndarray):
+        if rr is None:
+            return
         rr.log(name, rr.DepthImage(detph))
 
     @staticmethod
     def add_traj(name: str, traj: np.ndarray):
+        if rr is None:
+            return
         """
         name: str
         traj: np.ndarray (T, 10)
@@ -110,6 +134,8 @@ class RerunViewer:
 
     @staticmethod
     def clear():
+        if rr is None:
+            return
         rr.log("vis", rr.Clear(recursive=True))
         return
 

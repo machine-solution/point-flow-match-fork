@@ -1,0 +1,26 @@
+seed: 5678
+log_wandb: False
+
+env_runner:
+  num_episodes: 100
+  max_episode_length: 200
+  verbose: True
+  env_config:
+    voxel_size: 0.01
+    headless: True
+    vis: False
+
+switch:
+  gripper_thr: 0.5
+  closed_steps_to_switch: 3
+
+policy_pre:
+  ckpt_name: open_fridge_pre_123456
+  ckpt_episode: latest
+  num_k_infer: 50
+
+policy_post:
+  ckpt_name: open_fridge_post_123456
+  ckpt_episode: latest
+  num_k_infer: 50
+

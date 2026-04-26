@@ -8,8 +8,8 @@
 # Запуск после pre (вручную или с зависимостью):
 #   sbatch --dependency=afterok:<PRE_JOB_ID> dexter/run_open_fridge_post_grasp.sbatch
 #
-# Датасет: demos/sim/open_fridge/train_post_grasp. Если нет data/ — качает
-# dexter/download_open_fridge_two_phase.sh (оба архива).
+# Датасет (stable3): demos/sim/open_fridge/train_post_grasp_stable3. Если нет data/ — качает
+# dexter/download_open_fridge_two_phase.sh --stable3 (оба архива).
 
 #SBATCH --job-name=pfm_of_post
 #SBATCH --output=logs/pfm_open_fridge_post_%j.out
@@ -42,14 +42,14 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
 echo "=== nvidia-smi ==="
 nvidia-smi || true
 
-PFP_TRAIN_POST="${PFP_TRAIN_POST:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_post_grasp}"
+PFP_TRAIN_POST="${PFP_TRAIN_POST:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_post_grasp_stable3}"
 POST_DATA="${PFP_TRAIN_POST}/data"
 
 if [[ ! -d "${POST_DATA}" ]]; then
-  echo "=== Downloading pre/post datasets (dexter/download_open_fridge_two_phase.sh) ==="
-  bash dexter/download_open_fridge_two_phase.sh
+  echo "=== Downloading stable3 pre/post datasets (dexter/download_open_fridge_two_phase.sh --stable3) ==="
+  bash dexter/download_open_fridge_two_phase.sh --stable3
 else
-  echo "=== train_post_grasp already present, skipping download ==="
+  echo "=== train_post_grasp_stable3 already present, skipping download ==="
 fi
 
 if [[ ! -d "${POST_DATA}" ]]; then

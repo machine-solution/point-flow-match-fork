@@ -13,6 +13,22 @@ from pfp.envs.rlbench_runner_playback import RLBenchRunnerPlayback
 from pfp.common.visualization import RerunViewer as RV
 
 
+def _parse_episode_indices(v) -> list[int] | None:
+    if v is None:
+        return None
+    if isinstance(v, (list, tuple)):
+        out: list[int] = []
+        for x in v:
+            s = str(x).strip()
+            if s:
+                out.append(int(s))
+        return out if out else None
+    s = str(v).strip()
+    if not s:
+        return None
+    return [int(x.strip()) for x in s.split(",") if x.strip()]
+
+
 @hydra.main(version_base=None, config_path="../conf", config_name="eval")
 def main(cfg: OmegaConf):
     if not OmegaConf.has_resolver("eval"):
@@ -72,9 +88,13 @@ def main(cfg: OmegaConf):
     )
     
     # Use playback runner (with GUI)
+    episode_indices = None
+    with open_dict(cfg):
+        episode_indices = _parse_episode_indices(cfg.get("episodes", None))
     env_runner = RLBenchRunnerPlayback(
         input_file=input_file,
         env_config=dict(cfg.env_runner.env_config),
+        episode_indices=episode_indices,
         verbose=cfg.env_runner.get("verbose", False),
     )
     _ = env_runner.run()

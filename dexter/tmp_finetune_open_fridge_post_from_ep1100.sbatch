@@ -4,7 +4,7 @@
 #
 # Запуск (из корня репозитория PointFlowMatch):
 #   export CKPT_SRC=/abs/path/to/ep1100-ba72600-rank0.pt
-#   export PFP_TRAIN_POST=/abs/path/to/demos/sim/open_fridge/train_post_grasp
+#   export PFP_TRAIN_POST=/abs/path/to/demos/sim/open_fridge/train_post_grasp_stable3
 #   sbatch dexter/tmp_finetune_open_fridge_post_from_ep1100.sbatch
 #
 # По умолчанию пытается использовать conda-окружение ./pfp-train-env (как на Dexter).
@@ -56,7 +56,7 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
 
 # Inputs
 CKPT_SRC="${CKPT_SRC:?Set CKPT_SRC=/abs/path/to/ep1100-....pt}"
-PFP_TRAIN_POST="${PFP_TRAIN_POST:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_post_grasp}"
+PFP_TRAIN_POST="${PFP_TRAIN_POST:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_post_grasp_stable3}"
 
 if [[ ! -f "${CKPT_SRC}" ]]; then
   echo "ERROR: CKPT_SRC not found: ${CKPT_SRC}" >&2

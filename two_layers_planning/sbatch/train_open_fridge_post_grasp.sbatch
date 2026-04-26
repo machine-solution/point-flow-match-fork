@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #
-# Пост-захват. Датасет (train): https://disk.yandex.ru/d/OmzMhzSy0lGTMw
+# Пост-захват (stable3). Датасет (train): https://disk.yandex.ru/d/U4bBHq7LZuBg9A
 # Распакуйте zarr так, чтобы был каталог data/meta.
 #
 # Запуск из корня репозитория:
@@ -26,7 +26,7 @@ cd "$REPO_ROOT"
 DP_ROOT="${DIFFUSION_POLICY_ROOT:-$REPO_ROOT/../diffusion_policy}"
 export PYTHONPATH="${REPO_ROOT}:${DP_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
 
-PFP_TRAIN_POST="${PFP_TRAIN_POST:-$REPO_ROOT/demos/sim/open_fridge/train_post_grasp}"
+PFP_TRAIN_POST="${PFP_TRAIN_POST:-$REPO_ROOT/demos/sim/open_fridge/train_post_grasp_stable3}"
 
 echo "[sbatch] REPO_ROOT=$REPO_ROOT"
 echo "[sbatch] PFP_TRAIN_POST=$PFP_TRAIN_POST"

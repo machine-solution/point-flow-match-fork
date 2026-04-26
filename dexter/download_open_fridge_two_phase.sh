@@ -7,6 +7,8 @@
 # Запуск из корня репозитория:
 #   bash dexter/download_open_fridge_two_phase.sh
 #   bash dexter/download_open_fridge_two_phase.sh --force
+#   bash dexter/download_open_fridge_two_phase.sh --stable3
+#   bash dexter/download_open_fridge_two_phase.sh --stable3 --force
 #
 set -euo pipefail
 
@@ -17,7 +19,18 @@ PYTHON="${PYTHON:-python3}"
 EXTRACT="${REPO_ROOT}/dexter/extract_zarr_tarball.py"
 
 FORCE=0
-if [[ "${1:-}" == "--force" ]]; then FORCE=1; fi
+STABLE3=0
+for arg in "$@"; do
+  case "${arg}" in
+    --force) FORCE=1 ;;
+    --stable3) STABLE3=1 ;;
+    *)
+      echo "Unknown argument: ${arg}" >&2
+      echo "Usage: bash dexter/download_open_fridge_two_phase.sh [--stable3] [--force]" >&2
+      exit 2
+      ;;
+  esac
+done
 
 download_one() {
   local PUBLIC_KEY="$1"
@@ -71,4 +84,12 @@ download_one "https://disk.yandex.ru/d/E81_4UbQiwAYpw" "train_pre_grasp.tar.gz" 
 download_one "https://disk.yandex.ru/d/OmzMhzSy0lGTMw" "train_post_grasp.tar.gz" \
   "demos/sim/open_fridge/train_post_grasp"
 
-echo "Готово: двухфазные train zarr в demos/sim/open_fridge/train_pre_grasp и train_post_grasp"
+if [[ ${STABLE3} -eq 1 ]]; then
+  download_one "https://disk.yandex.ru/d/koQoDdaJ-t4b8A" "train_pre_grasp_stable3.tar.gz" \
+    "demos/sim/open_fridge/train_pre_grasp_stable3"
+  download_one "https://disk.yandex.ru/d/U4bBHq7LZuBg9A" "train_post_grasp_stable3.tar.gz" \
+    "demos/sim/open_fridge/train_post_grasp_stable3"
+  echo "Готово: stable3 train zarr в demos/sim/open_fridge/train_pre_grasp_stable3 и train_post_grasp_stable3"
+else
+  echo "Готово: двухфазные train zarr в demos/sim/open_fridge/train_pre_grasp и train_post_grasp"
+fi

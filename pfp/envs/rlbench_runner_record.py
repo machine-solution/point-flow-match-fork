@@ -84,18 +84,35 @@ class RLBenchRunnerRecord:
                 "episode_seed": episode_seed,
                 "actions": [],
                 "robot_states": [],
+                # Optional: two-phase handoff logging (filled if policy supports it)
+                "phases": [],
+                "switch_step": None,
                 "success": False,
                 "steps": 0,
             }
 
             for step in range(self.max_episode_length):
                 robot_state, obs = self.env.get_obs()
+                # If policy supports step-aware logging, provide the env step index
+                if hasattr(policy, "set_step"):
+                    try:
+                        policy.set_step(step)  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
                 prediction = policy.predict_action(obs, robot_state)
                 next_robot_state = prediction[-1, 0]  # Last K step, first T step
 
                 # Record action and robot state
                 episode_data["actions"].append(next_robot_state.tolist())
                 episode_data["robot_states"].append(robot_state.tolist())
+                # Record phase if available
+                if hasattr(policy, "get_phase"):
+                    try:
+                        episode_data["phases"].append(policy.get_phase())  # type: ignore[attr-defined]
+                    except Exception:
+                        episode_data["phases"].append(None)
+                else:
+                    episode_data["phases"].append(None)
 
                 reward, terminate = self.env.step(next_robot_state)
                 success = bool(reward)
@@ -108,6 +125,12 @@ class RLBenchRunnerRecord:
                 episode_data["steps"] = self.max_episode_length
 
             # Keep in-memory aggregate
+            # Store switch_step if policy provides it
+            if hasattr(policy, "get_switch_step"):
+                try:
+                    episode_data["switch_step"] = policy.get_switch_step()  # type: ignore[attr-defined]
+                except Exception:
+                    episode_data["switch_step"] = None
             self.recorded_episodes.append(episode_data)
             success_list.append(episode_data["success"])
             if episode_data["success"]:

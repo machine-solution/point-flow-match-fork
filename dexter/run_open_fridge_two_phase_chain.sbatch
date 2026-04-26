@@ -32,15 +32,15 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 echo "=== Chain job ${SLURM_JOB_ID} on $(hostname) ==="
 nvidia-smi || true
 
-PFP_PRE="${PFP_TRAIN_PRE:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_pre_grasp}"
-PFP_POST="${PFP_TRAIN_POST:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_post_grasp}"
+PFP_PRE="${PFP_TRAIN_PRE:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_pre_grasp_stable3}"
+PFP_POST="${PFP_TRAIN_POST:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_post_grasp_stable3}"
 
 if [[ ! -d "${PFP_PRE}/data" ]] || [[ ! -d "${PFP_POST}/data" ]]; then
   echo "=== Downloading datasets ==="
-  bash dexter/download_open_fridge_two_phase.sh
+  bash dexter/download_open_fridge_two_phase.sh --stable3
 fi
 if [[ ! -d "${PFP_PRE}/data" ]] || [[ ! -d "${PFP_POST}/data" ]]; then
-  echo "ERROR: missing train_pre_grasp or train_post_grasp zarr under demos/sim/open_fridge/" >&2
+  echo "ERROR: missing stable3 pre/post zarr under demos/sim/open_fridge/" >&2
   exit 1
 fi
 

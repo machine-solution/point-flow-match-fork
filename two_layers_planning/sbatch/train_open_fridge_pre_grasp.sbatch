@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #
-# Пре-захват. Датасет (train): https://disk.yandex.ru/d/E81_4UbQiwAYpw
+# Пре-захват (stable3). Датасет (train): https://disk.yandex.ru/d/koQoDdaJ-t4b8A
 # Распакуйте zarr так, чтобы был каталог data/meta (как в demos/sim/.../train).
 #
 # Запуск из корня репозитория PointFlowMatch:
@@ -26,7 +26,7 @@ cd "$REPO_ROOT"
 DP_ROOT="${DIFFUSION_POLICY_ROOT:-$REPO_ROOT/../diffusion_policy}"
 export PYTHONPATH="${REPO_ROOT}:${DP_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
 
-PFP_TRAIN_PRE="${PFP_TRAIN_PRE:-$REPO_ROOT/demos/sim/open_fridge/train_pre_grasp}"
+PFP_TRAIN_PRE="${PFP_TRAIN_PRE:-$REPO_ROOT/demos/sim/open_fridge/train_pre_grasp_stable3}"
 
 echo "[sbatch] REPO_ROOT=$REPO_ROOT"
 echo "[sbatch] PFP_TRAIN_PRE=$PFP_TRAIN_PRE"
