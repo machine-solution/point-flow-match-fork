@@ -39,6 +39,8 @@ class RLBenchEnv(BaseEnv):
         headless: bool,
         vis: bool,
         obs_mode: str = "pcd",
+        binarize_gripper: bool = False,
+        clip_gripper: bool = True,
     ):
         assert obs_mode in ["pcd", "rgb"], "Invalid obs_mode"
         self.obs_mode = obs_mode
@@ -46,6 +48,8 @@ class RLBenchEnv(BaseEnv):
         self.voxel_size = voxel_size
         self.n_points = n_points
         self.use_pc_color = use_pc_color
+        self.binarize_gripper = bool(binarize_gripper)
+        self.clip_gripper = bool(clip_gripper)
         camera_config = CameraConfig(
             rgb=True,
             depth=False,
@@ -98,7 +102,11 @@ class RLBenchEnv(BaseEnv):
     def step(self, robot_state: np.ndarray):
         ee_position = robot_state[:3]
         ee_quat = rot6d_to_quat_np(robot_state[3:9])
-        gripper = robot_state[-1:]
+        gripper = np.asarray(robot_state[-1:], dtype=np.float32)
+        if self.clip_gripper:
+            gripper = np.clip(gripper, 0.0, 1.0)
+        if self.binarize_gripper:
+            gripper = (gripper >= 0.5).astype(np.float32)
         action = np.concatenate([ee_position, ee_quat, gripper])
         reward, terminate = self._step_safe(action)
         return reward, terminate

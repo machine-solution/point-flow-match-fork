@@ -114,6 +114,14 @@ bash dexter/download_open_fridge_two_phase.sh
 # повторно: bash dexter/download_open_fridge_two_phase.sh --force
 ```
 
+**Двухфазное обучение (stable3, устойчивое закрытие) — новые архивы `train_pre_grasp_stable3` + `train_post_grasp_stable3`:**
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+bash dexter/download_open_fridge_two_phase.sh --stable3
+# повторно: bash dexter/download_open_fridge_two_phase.sh --stable3 --force
+```
+
 Скрипт `dexter/download_open_fridge_two_phase.sh` по очереди: API Яндекс.Диска → скачивание `train_pre_grasp.tar.gz` / `train_post_grasp.tar.gz` → распаковка в `demos/sim/open_fridge/train_pre_grasp` и `train_post_grasp` (через `dexter/extract_zarr_tarball.py`). Если каталог уже есть и в нём есть `data/` и `meta/`, шаг пропускается (кроме `--force`).
 
 Если не хочешь скачивать готовые pre/post, можно **разрезать** локально полный `train` после `download_dataset.sh`: `python two_layers_planning/split_dataset_at_first_grasp.py ...` (см. **`two_layers_planning/README.md`**).
