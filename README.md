@@ -165,6 +165,56 @@ Valid experiment names are the following, and they represent the different basel
 
 To train **two** policies—before and after the first gripper close—split demonstrations with `two_layers_planning/split_dataset_at_first_grasp.py`, then train with Hydra configs `train_open_fridge_pre_grasp` and `train_open_fridge_post_grasp`, or submit the Slurm scripts under `two_layers_planning/sbatch/`. Those configs use **`use_validation: false`**, so you only need the **train** zarr (no separate valid split). Step-by-step instructions (Russian), Yandex Disk links for pre-built archives, and environment notes: **`two_layers_planning/README.md`**.
 
+### Phase-Conditioned Single Model (no hard switch)
+
+Instead of training **two separate** policies (pre/post) and hard-switching between them (which can introduce distribution shift), you can train **one** shared PointFlowMatch model with an additional **phase token**:
+
+\[
+v_\\theta(x_t, t, obs) \\;\;\\to\\;\; v_\\theta(x_t, t, obs, phase)
+\]
+
+Phases are discrete labels:
+
+- `0`: approach / pre-grasp
+- `1`: contact window around the first gripper close
+- `2`: manipulation / post-grasp
+
+The phase labels are generated from demonstrations using a simple heuristic over the gripper channel `robot_state[:, 9]`:
+
+- detect the first timestep where `gripper_open < gripper_close_threshold`
+- set phase `0` before it
+- set phase `1` in a `contact_window` around it
+- set phase `2` after the window
+
+Enable it via the Hydra config group `phase_conditioning`:
+
+```bash
+# Baseline (no phase conditioning)
+python scripts/train.py task_name=open_fridge +experiment=pointflowmatch
+
+# Phase-conditioned single model
+python scripts/train.py task_name=open_fridge +experiment=pointflowmatch phase_conditioning=enabled
+```
+
+Config knobs:
+
+- `phase_conditioning.enabled` (bool)
+- `phase_conditioning.num_phases` (default 3)
+- `phase_conditioning.contact_window` (int)
+- `phase_conditioning.gripper_close_threshold` (float)
+- `phase_conditioning.phase_embed_dim` (int)
+
+Debugging phase labels on a zarr dataset:
+
+```bash
+PYTHONPATH=../diffusion_policy python scripts/debug_phase_labels.py \
+  --zarr demos/sim/open_fridge/train \
+  --episodes 0,1,2 \
+  --thr 0.5 \
+  --contact-window 2 \
+  --out outputs/debug_phase_labels.png
+```
+
 ### `open_fridge` datasets: commands (cluster / VM)
 
 From the **repository root** (needs network, `python3`, `tar`):

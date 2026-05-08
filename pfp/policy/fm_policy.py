@@ -10,6 +10,11 @@ from pfp import DEVICE, REPO_DIRS
 from pfp.common.se3_utils import init_random_traj_th
 from pfp.common.fm_utils import get_timesteps
 from pfp.data.dataset_pcd import augment_pcd_data
+from pfp.common.phase_utils import (
+    PhaseConditioningConfig,
+    compute_phase_labels_torch_from_gripper,
+    phase_cfg_from,
+)
 
 
 class FMPolicy(ComposerModel, BasePolicy):
@@ -37,6 +42,7 @@ class FMPolicy(ComposerModel, BasePolicy):
         exp_scale: float = None,
         snr_sampler: str = "uniform",
         subs_factor: int = 1,
+        phase_conditioning: dict | None = None,
     ) -> None:
         ComposerModel.__init__(self)
         BasePolicy.__init__(self, n_obs_steps, subs_factor)
@@ -62,6 +68,14 @@ class FMPolicy(ComposerModel, BasePolicy):
         self.flow_schedule = flow_schedule
         self.exp_scale = exp_scale
         self.snr_sampler = snr_sampler
+        self.phase_cfg: PhaseConditioningConfig = phase_cfg_from(phase_conditioning)
+        self.phase_enabled = bool(self.phase_cfg.enabled)
+        if self.phase_enabled:
+            self.phase_embedding = nn.Embedding(self.phase_cfg.num_phases, self.phase_cfg.phase_embed_dim)
+            self.phase_to_y = nn.Linear(self.phase_cfg.phase_embed_dim, y_dim)
+        else:
+            self.phase_embedding = None
+            self.phase_to_y = None
         if loss_type == "l2":
             self.loss_fun = nn.MSELoss()
         elif loss_type == "l1":
@@ -96,10 +110,13 @@ class FMPolicy(ComposerModel, BasePolicy):
         return robot_state
 
     def _norm_data(self, batch: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
-        pcd, robot_state_obs, robot_state_pred = batch
+        # batch may be (pcd, robot_state_obs, robot_state_pred) or (..., phase_pred)
+        pcd, robot_state_obs, robot_state_pred = batch[:3]
         pcd = self._norm_obs(pcd)
         robot_state_obs = self._norm_robot_state(robot_state_obs)
         robot_state_pred = self._norm_robot_state(robot_state_pred)
+        if len(batch) >= 4:
+            return pcd, robot_state_obs, robot_state_pred, batch[3]
         return pcd, robot_state_obs, robot_state_pred
 
     def _augment_data(self, batch: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
@@ -192,9 +209,15 @@ class FMPolicy(ComposerModel, BasePolicy):
             batch = self._norm_data(batch)
             if self.augment_data:
                 batch = self._augment_data(batch)
-        pcd, robot_state_obs, robot_state_pred = batch
+        pcd, robot_state_obs, robot_state_pred = batch[:3]
+        phase_pred = batch[3] if (self.phase_enabled and len(batch) >= 4) else None
+        if self.phase_enabled and phase_pred is None:
+            raise ValueError(
+                "phase_conditioning.enabled=true, but dataset batch has no phase tensor. "
+                "Pass phase_conditioning to dataset and ensure it returns phase_pred."
+            )
         loss_xyz, loss_rot6d, loss_grip = self.calculate_loss(
-            pcd, robot_state_obs, robot_state_pred
+            pcd, robot_state_obs, robot_state_pred, phase=phase_pred
         )
         loss = (
             self.l_w["xyz"] * loss_xyz
@@ -211,7 +234,12 @@ class FMPolicy(ComposerModel, BasePolicy):
         return loss
 
     def calculate_loss(
-        self, pcd: torch.Tensor, robot_state_obs: torch.Tensor, robot_state_pred: torch.Tensor
+        self,
+        pcd: torch.Tensor,
+        robot_state_obs: torch.Tensor,
+        robot_state_pred: torch.Tensor,
+        *,
+        phase: torch.Tensor | None = None,
     ):
         nx: torch.Tensor = self.obs_encoder(pcd, robot_state_obs)
         ny: torch.Tensor = robot_state_pred
@@ -220,6 +248,17 @@ class FMPolicy(ComposerModel, BasePolicy):
         z0 = self._init_noise(ny.shape[0])
         z1 = ny
         z_t = t * z1 + (1.0 - t) * z0
+        if self.phase_enabled:
+            if phase is None:
+                raise ValueError("phase_conditioning.enabled=true requires phase labels in calculate_loss().")
+            if phase.dtype != torch.int64:
+                phase = phase.to(torch.int64)
+            if phase.shape != (B, T):
+                raise ValueError(f"phase must be (B,T)={B,T}, got {tuple(phase.shape)}")
+            if torch.any((phase < 0) | (phase >= self.phase_cfg.num_phases)):
+                raise ValueError("phase has values outside [0, num_phases-1].")
+            phase_emb = self.phase_embedding(phase)  # (B,T,E)
+            z_t = z_t + self.phase_to_y(phase_emb)  # (B,T,y_dim)
         target_vel = z1 - z0
         timesteps = t.squeeze() * self.pos_emb_scale if self.time_conditioning else None
         pred_vel = self.diffusion_net(z_t, timesteps, global_cond=nx)
@@ -239,11 +278,12 @@ class FMPolicy(ComposerModel, BasePolicy):
         outputs: the output of the forward pass
         """
         batch = self._norm_data(batch)
-        pcd, robot_state_obs, robot_state_pred = batch
+        pcd, robot_state_obs, robot_state_pred = batch[:3]
+        phase_pred = batch[3] if (self.phase_enabled and len(batch) >= 4) else None
 
         # Eval loss
         loss_xyz, loss_rot6d, loss_grip = self.calculate_loss(
-            pcd, robot_state_obs, robot_state_pred
+            pcd, robot_state_obs, robot_state_pred, phase=phase_pred
         )
         loss_total = (
             self.l_w["xyz"] * loss_xyz
@@ -260,7 +300,7 @@ class FMPolicy(ComposerModel, BasePolicy):
         )
 
         # Eval metrics
-        pred_y = self.infer_y(pcd, robot_state_obs)
+        pred_y = self.infer_y(pcd, robot_state_obs, phase=None)
         mse_xyz = nn.functional.mse_loss(pred_y[..., :3], robot_state_pred[..., :3])
         mse_rot6d = nn.functional.mse_loss(pred_y[..., 3:9], robot_state_pred[..., 3:9])
         mse_grip = nn.functional.mse_loss(pred_y[..., 9], robot_state_pred[..., 9])
@@ -277,6 +317,7 @@ class FMPolicy(ComposerModel, BasePolicy):
         self,
         pcd: torch.Tensor,
         robot_state_obs: torch.Tensor,
+        phase: torch.Tensor | None = None,
         noise=None,
         return_traj=False,
     ) -> torch.Tensor:
@@ -284,11 +325,49 @@ class FMPolicy(ComposerModel, BasePolicy):
         B = nx.shape[0]
         z = self._init_noise(B) if noise is None else noise
         traj = [z]
+        phase_seq = None
+        if self.phase_enabled:
+            # If phase not provided, use heuristic over horizon based on current gripper state.
+            if phase is None:
+                # robot_state_obs: (B, n_obs, 10)
+                g_last = robot_state_obs[:, -1, 9]
+                ph, _ = compute_phase_labels_torch_from_gripper(
+                    g_last.view(B, 1).repeat(1, self.n_pred_steps),
+                    thr=self.phase_cfg.gripper_close_threshold,
+                    contact_window=self.phase_cfg.contact_window,
+                    num_phases=self.phase_cfg.num_phases,
+                )
+                # If gripper is open, we want phase 0 early, then contact window, then phase 2.
+                # Approximate grasp time at middle of horizon.
+                open_mask = (g_last >= self.phase_cfg.gripper_close_threshold).view(B, 1)
+                if bool(open_mask.any()):
+                    T = self.n_pred_steps
+                    t_grasp = max(0, min(T - 1, int(0.5 * T)))
+                    w = max(0, int(self.phase_cfg.contact_window))
+                    tt = torch.arange(T, device=DEVICE).view(1, T)
+                    base = torch.where(tt <= (t_grasp + w), torch.zeros_like(tt), torch.full_like(tt, 2))
+                    win = (tt >= (t_grasp - w)) & (tt <= (t_grasp + w))
+                    base = torch.where(win, torch.ones_like(base), base).to(torch.int64)
+                    ph = torch.where(open_mask, base.expand(B, T), ph)
+                phase_seq = ph
+            else:
+                if phase.dtype != torch.int64:
+                    phase = phase.to(torch.int64)
+                if phase.ndim == 1:
+                    phase_seq = phase.view(B, 1).repeat(1, self.n_pred_steps)
+                else:
+                    phase_seq = phase
+            if phase_seq.shape != (B, self.n_pred_steps):
+                raise ValueError(f"phase must broadcast to (B,T)={(B,self.n_pred_steps)}, got {tuple(phase_seq.shape)}")
         t0, dt = get_timesteps(self.flow_schedule, self.num_k_infer, exp_scale=self.exp_scale)
         for i in range(self.num_k_infer):
             timesteps = torch.ones((B), device=DEVICE) * t0[i]
             timesteps *= self.pos_emb_scale
-            vel_pred = self.diffusion_net(z, timesteps, global_cond=nx)
+            z_in = z
+            if self.phase_enabled:
+                phase_emb = self.phase_embedding(phase_seq)  # (B,T,E)
+                z_in = z_in + self.phase_to_y(phase_emb)
+            vel_pred = self.diffusion_net(z_in, timesteps, global_cond=nx)
             z = z.detach().clone() + vel_pred * dt[i]
             traj.append(z)
 

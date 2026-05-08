@@ -64,3 +64,5 @@ lr_scheduler:
 defaults:
   - model: flow
   - backbone: pointnet
+  # NOTE: avoid YAML 1.1 booleans ("on/off") in defaults
+  - phase_conditioning: disabled

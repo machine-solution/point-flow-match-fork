@@ -17,13 +17,34 @@ from composer.callbacks import LRMonitor
 from composer.models import ComposerModel
 from composer.algorithms import EMA
 from composer.core import Callback, Event
-from diffusion_policy.model.common.lr_scheduler import get_scheduler
+try:
+    # diffusion_policy uses diffusers.schedulers; some environments may have an incompatible
+    # huggingface_hub/diffusers combo. We fall back to a simple torch scheduler for smoke runs.
+    from diffusion_policy.model.common.lr_scheduler import get_scheduler  # type: ignore
+except Exception as e:  # pragma: no cover
+    print(f"[lr_scheduler] WARNING: failed to import diffusion_policy get_scheduler: {e}")
+    print("[lr_scheduler] Falling back to torch.optim.lr_scheduler.LambdaLR (linear warmup then constant).")
+    import torch
+
+    def get_scheduler(name, *, optimizer, num_warmup_steps: int, num_training_steps: int):
+        num_warmup_steps = int(num_warmup_steps)
+        num_training_steps = int(num_training_steps)
+
+        def lr_lambda(step: int) -> float:
+            if num_warmup_steps <= 0:
+                return 1.0
+            if step < num_warmup_steps:
+                return float(step) / float(max(1, num_warmup_steps))
+            return 1.0
+
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 from pfp import DEVICE, DATA_DIRS, REPO_DIRS, set_seeds
 from pfp.data.dataset_pcd import RobotDatasetPcd
 from pfp.data.dataset_images import RobotDatasetImages
 
 
-ts.add_safe_globals([ListConfig, ContainerMetadata, Any, list])
+if hasattr(ts, "add_safe_globals"):
+    ts.add_safe_globals([ListConfig, ContainerMetadata, Any, list])
 
 def _tensor_size_mb(t: torch.Tensor) -> float:
     return t.numel() * t.element_size() / (1024 ** 2)
@@ -218,15 +239,28 @@ def main(cfg: OmegaConf):
         print("[data] valid: (disabled, use_validation=false)")
 
     if cfg.obs_mode == "pcd":
-        dataset_train = RobotDatasetPcd(data_path_train, **cfg.dataset)
+        dataset_train = RobotDatasetPcd(data_path_train, phase_conditioning=getattr(cfg, "phase_conditioning", None), **cfg.dataset)
         dataset_valid = (
-            RobotDatasetPcd(data_path_valid, **cfg.dataset) if use_val else None
+            RobotDatasetPcd(data_path_valid, phase_conditioning=getattr(cfg, "phase_conditioning", None), **cfg.dataset) if use_val else None
         )
     elif cfg.obs_mode == "rgb":
-        dataset_train = RobotDatasetImages(data_path_train, **cfg.dataset)
+        dataset_train = RobotDatasetImages(data_path_train, phase_conditioning=getattr(cfg, "phase_conditioning", None), **cfg.dataset)
         dataset_valid = (
-            RobotDatasetImages(data_path_valid, **cfg.dataset) if use_val else None
+            RobotDatasetImages(data_path_valid, phase_conditioning=getattr(cfg, "phase_conditioning", None), **cfg.dataset) if use_val else None
         )
+    # Phase conditioning logging (optional)
+    pcfg = getattr(cfg, "phase_conditioning", None)
+    if pcfg is not None and bool(getattr(pcfg, "enabled", False)):
+        try:
+            stats = dataset_train.phase_stats() if hasattr(dataset_train, "phase_stats") else None
+            if stats:
+                print(f"[phase] enabled=True  num_phases={stats.get('num_phases')}  embed_dim={getattr(pcfg, 'phase_embed_dim', None)}")
+                print(f"[phase] contact_window={stats.get('contact_window')} thr={stats.get('gripper_close_threshold')}")
+                print(f"[phase] episodes_scanned={stats.get('episodes_scanned')} no_grasp={stats.get('no_grasp_episodes')}")
+                print(f"[phase] phase_fracs={stats.get('phase_fracs')} avg_grasp_timestep={stats.get('avg_grasp_timestep')}")
+        except Exception as e:
+            print(f"[phase] warning: could not compute dataset phase stats: {e}")
+
     else:
         raise ValueError(f"Unknown observation mode: {cfg.obs_mode}")
     print("[memory] after dataset_train" + (", dataset_valid" if use_val else ""))
@@ -251,7 +285,7 @@ def main(cfg: OmegaConf):
     print("[memory] after dataloader_train" + (", dataloader_valid" if use_val else ""))
     _log_gpu_memory("after dataloaders")
 
-    composer_model: ComposerModel = hydra.utils.instantiate(cfg.model)
+    composer_model: ComposerModel = hydra.utils.instantiate(cfg.model, phase_conditioning=getattr(cfg, "phase_conditioning", None))
     print("[memory] after composer_model = instantiate(cfg.model)")
     _log_gpu_memory("after model create")
 

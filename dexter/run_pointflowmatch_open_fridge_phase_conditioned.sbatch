@@ -1,14 +1,16 @@
 #!/bin/bash
 #
-# Slurm job: train PointFlowMatch (gripper-weighted loss) on the open_fridge task.
+# Slurm job: train Phase-Conditioned Single Model (PointFlowMatch) on open_fridge.
 #
 # Usage (from repo root):
-#   sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
+#   sbatch dexter/run_pointflowmatch_open_fridge_phase_conditioned.sbatch
 #
-
-#SBATCH --job-name=pfm_open_fridge_gripw
-#SBATCH --output=logs/pfm_open_fridge_gripw_%j.out
-#SBATCH --error=logs/pfm_open_fridge_gripw_%j.err
+# This is the same as dexter/run_pointflowmatch_open_fridge.sbatch, but with:
+#   phase_conditioning=enabled
+#
+#SBATCH --job-name=pfm_open_fridge_phase
+#SBATCH --output=logs/pfm_open_fridge_phase_%j.out
+#SBATCH --error=logs/pfm_open_fridge_phase_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus=1
@@ -18,7 +20,7 @@
 
 set -e
 
-CKPT_BACKUP_DIR="${HOME}/checkpoints/pointflowmatch_gripw"
+CKPT_BACKUP_DIR="${HOME}/checkpoints/pointflowmatch_phase"
 
 cd "${SLURM_SUBMIT_DIR}"
 mkdir -p logs
@@ -42,7 +44,6 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
 
 TRAIN_DIR="demos/sim/open_fridge/train"
 VALID_DIR="demos/sim/open_fridge/valid"
-
 if [ ! -d "${TRAIN_DIR}" ] || [ ! -d "${VALID_DIR}" ]; then
     echo "=== Downloading dataset from Yandex Disk ==="
     bash dexter/download_dataset.sh
@@ -54,17 +55,12 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
 echo "=== Disk space before training ==="
 df -h . /tmp 2>/dev/null || df -h .
-echo "=== Starting training (gripper-weighted loss) ==="
 
-# Phase-conditioned single model (optional):
-#   export PFP_PHASE_CONDITIONING=enabled
-# Default is disabled.
-PFP_PHASE_CONDITIONING="${PFP_PHASE_CONDITIONING:-disabled}"
-
+echo "=== Starting training (phase-conditioned single model) ==="
 python scripts/train.py \
     task_name=open_fridge \
-    +experiment=pointflowmatch_gripper_weighted \
-    phase_conditioning="${PFP_PHASE_CONDITIONING}" \
+    +experiment=pointflowmatch \
+    phase_conditioning=enabled \
     dataloader.num_workers=8 \
     dataloader.batch_size=128 \
     log_wandb=False

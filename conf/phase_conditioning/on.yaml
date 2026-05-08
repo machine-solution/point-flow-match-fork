@@ -1,0 +1,6 @@
+enabled: true
+num_phases: 3
+contact_window: 2
+gripper_close_threshold: 0.5
+phase_embed_dim: 32
+

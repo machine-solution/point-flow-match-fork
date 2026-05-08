@@ -155,6 +155,22 @@ conda activate ./pfp-train-env
 sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
 ```
 
+**Phase‑Conditioned Single Model (одна shared модель с phase token, без hard switch):**
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+conda activate ./pfp-train-env
+sbatch dexter/run_pointflowmatch_open_fridge_phase_conditioned.sbatch
+```
+
+**Phase‑Conditioned + gripper‑weighted loss:**
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+conda activate ./pfp-train-env
+sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted_phase_conditioned.sbatch
+```
+
 **Двухфазное обучение (pre, затем post)** — из корня репозитория, окружение `pfp-train-env` уже используется внутри `.sbatch` (как в `run_pointflowmatch_open_fridge.sbatch`):
 
 ```bash

@@ -18,3 +18,7 @@ policy:
   # Uncomment the following to override settings used during training
   # flow_schedule: linear  # linear | cosine | exp
   # exp_scale: 4.0
+
+defaults:
+  # NOTE: avoid YAML 1.1 booleans ("on/off") in defaults
+  - phase_conditioning: disabled

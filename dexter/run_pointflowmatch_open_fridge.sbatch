@@ -77,12 +77,17 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 echo "=== Disk space before training ==="
 df -h . /tmp 2>/dev/null || df -h .
 echo "=== Starting training ==="
+# Phase-conditioned single model (optional):
+#   export PFP_PHASE_CONDITIONING=enabled
+# Default is disabled.
+PFP_PHASE_CONDITIONING="${PFP_PHASE_CONDITIONING:-disabled}"
 # batch_size=128 (при OOM понизь до 64 в override)
 # Вариант: продолжить обучение, инициализировав веса из ckpt/open_fridge_2302_500/ep500*
 # При желании начни новый ран с нуля — просто убери resume_* и поменяй run_name.
 python scripts/train.py \
     task_name=open_fridge \
     +experiment=pointflowmatch \
+    phase_conditioning="${PFP_PHASE_CONDITIONING}" \
     dataloader.num_workers=8 \
     dataloader.batch_size=128 \
     log_wandb=False

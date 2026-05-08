@@ -36,3 +36,6 @@
   use_gripper_motion_weights: false
   gripper_motion_lambda: 3.0
   gripper_motion_window: 1
+
+  # Phase-conditioned single model (optional)
+  phase_conditioning: ${phase_conditioning}
