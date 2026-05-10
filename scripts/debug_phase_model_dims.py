@@ -7,9 +7,12 @@ import sys
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
+
+from pfp.policy.fm_policy import _unet_stem_in_channels
 
 
 def _expected_input_dim(*, y_dim: int, phase_enabled: bool, phase_embed_dim: int) -> int:
@@ -54,7 +57,15 @@ def main() -> None:
 
         model = instantiate(cfg.model, phase_conditioning=pcfg)
         model = model.float()
+        assert isinstance(model.diffusion_net, nn.Module), "diffusion_net must be nn.Module"
+        ctor = getattr(model, "_diffusion_net_ctor_source", "?")
+        print(f"  ctor: {ctor}")
         actual_in = int(getattr(model, "diffusion_net_input_dim", -1))
+        stem_in = _unet_stem_in_channels(model.diffusion_net)
+        print(f"  UNet stem in_channels (from first conv) = {stem_in}")
+        if stem_in is not None and stem_in != exp_in:
+            print("  ERROR: stem in_channels != expected input_dim", file=sys.stderr)
+            sys.exit(1)
 
         out_ch = None
         fc = getattr(model.diffusion_net, "final_conv", None)

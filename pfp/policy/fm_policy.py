@@ -1,5 +1,6 @@
 from __future__ import annotations
 import functools
+import logging
 import sys
 import hydra
 import torch
@@ -18,26 +19,77 @@ from pfp.common.phase_utils import (
     phase_cfg_from,
 )
 
+logger = logging.getLogger(__name__)
 
-def build_diffusion_net_unet(
+
+def _unet_stem_in_channels(unet: nn.Module) -> int | None:
+    """Best-effort read of ConditionalUnet1D first stem Conv1d in_channels (matches input_dim)."""
+    try:
+        conv = unet.down_modules[0][0].blocks[0].block[0]
+        if isinstance(conv, nn.Conv1d):
+            return int(conv.in_channels)
+    except Exception:
+        return None
+    return None
+
+
+def instantiate_diffusion_net_for_fm(
     diffusion_net: nn.Module | functools.partial | DictConfig | dict,
     *,
     input_dim: int,
     output_dim: int,
-) -> nn.Module:
+) -> tuple[nn.Module, str]:
     """
-    Construct ConditionalUnet1D with runtime channel sizes.
+    Build ConditionalUnet1D for FMPolicy.
 
-    Hydra normally passes a functools.partial when config uses ``_partial_: true``; tests may pass
-    an already-built module.
+    Hydra with ``_partial_: true`` passes a ``functools.partial`` bound to the class; **calling**
+    the partial with ``input_dim`` / ``output_dim`` produces a real ``nn.Module``. Passing a bare
+    partial through as ``self.diffusion_net`` would break forward (the partial would be invoked as
+    if it were the network).
     """
     if isinstance(diffusion_net, nn.Module):
-        return diffusion_net
-    if isinstance(diffusion_net, functools.partial):
-        return diffusion_net(input_dim=input_dim, output_dim=output_dim)
+        return diffusion_net, "already nn.Module"
+
     if isinstance(diffusion_net, DictConfig) or isinstance(diffusion_net, dict):
-        return hydra.utils.instantiate(diffusion_net, input_dim=input_dim, output_dim=output_dim)
-    raise TypeError(f"diffusion_net must be nn.Module, functools.partial, or DictConfig; got {type(diffusion_net)}")
+        m = hydra.utils.instantiate(diffusion_net, input_dim=input_dim, output_dim=output_dim)
+        if not isinstance(m, nn.Module):
+            raise TypeError(f"instantiated diffusion_net is not nn.Module: {type(m)}")
+        return m, "hydra.utils.instantiate(DictConfig|dict)"
+
+    if isinstance(diffusion_net, functools.partial):
+        m = diffusion_net(input_dim=input_dim, output_dim=output_dim)
+        if not isinstance(m, nn.Module):
+            raise TypeError(f"partial did not return nn.Module: {type(m)}")
+        return m, "functools.partial(...) completed"
+
+    if callable(diffusion_net):
+        m = diffusion_net(input_dim=input_dim, output_dim=output_dim)
+        if not isinstance(m, nn.Module):
+            raise TypeError(f"callable did not return nn.Module: {type(m)}")
+        return m, "callable constructor"
+
+    raise TypeError(
+        f"diffusion_net must be nn.Module, functools.partial, DictConfig, dict, or callable; "
+        f"got {type(diffusion_net)}"
+    )
+
+
+def _warn_checkpoint_shape_mismatches(module: nn.Module, state_dict: dict, *, tag: str) -> None:
+    """Before load_state_dict: warn if overlapping tensors differ in shape (e.g. phase_embed_dim)."""
+    for key in ("phase_embedding.weight", "phase_embedding.bias"):
+        if key not in state_dict:
+            continue
+        if key not in module.state_dict():
+            continue
+        t_ckpt = state_dict[key]
+        t_mod = module.state_dict()[key]
+        if t_ckpt.shape != t_mod.shape:
+            print(
+                f"[checkpoint:{tag}] WARNING: tensor shape mismatch for '{key}': "
+                f"checkpoint {tuple(t_ckpt.shape)} vs model {tuple(t_mod.shape)} "
+                f"(e.g. different phase_embed_dim). Load may fail or require strict=False partial load.",
+                file=sys.stderr,
+            )
 
 
 def log_state_dict_load(
@@ -49,6 +101,7 @@ def log_state_dict_load(
     phase_enabled: bool | None = None,
 ) -> tuple[list[str], list[str]]:
     """load_state_dict(strict=False) with stderr diagnostics for silent-compat loads."""
+    _warn_checkpoint_shape_mismatches(module, state_dict, tag=tag)
     incompatible = module.load_state_dict(state_dict, strict=strict)
     missing = list(incompatible.missing_keys)
     unexpected = list(incompatible.unexpected_keys)
@@ -151,12 +204,38 @@ class FMPolicy(ComposerModel, BasePolicy):
         effective_input_dim = int(y_dim)
         if self.phase_enabled:
             effective_input_dim += int(self.phase_cfg.phase_embed_dim)
-        self.diffusion_net = build_diffusion_net_unet(
+
+        self.diffusion_net, ctor_src = instantiate_diffusion_net_for_fm(
             diffusion_net,
             input_dim=effective_input_dim,
             output_dim=int(y_dim),
         )
+        self._diffusion_net_ctor_source = ctor_src
         self.diffusion_net_input_dim = effective_input_dim
+
+        assert isinstance(self.diffusion_net, nn.Module), "diffusion_net must be nn.Module after init"
+        stem_in = _unet_stem_in_channels(self.diffusion_net)
+        if stem_in is not None and stem_in != effective_input_dim:
+            raise AssertionError(
+                f"UNet stem in_channels={stem_in} != effective_input_dim={effective_input_dim}"
+            )
+
+        print(
+            f"[FMPolicy] diffusion_net: {ctor_src}\n"
+            f"  phase_conditioning.enabled={self.phase_enabled}  y_dim={y_dim}  "
+            f"phase_embed_dim={int(self.phase_cfg.phase_embed_dim) if self.phase_enabled else 0}\n"
+            f"  effective_input_dim (sample channels)={effective_input_dim}  "
+            f"velocity output_dim={int(y_dim)}",
+            file=sys.stderr,
+        )
+        logger.info(
+            "FMPolicy diffusion_net ctor=%s phase_enabled=%s y_dim=%s effective_input_dim=%s",
+            ctor_src,
+            self.phase_enabled,
+            y_dim,
+            effective_input_dim,
+        )
+
         if loss_type == "l2":
             self.loss_fun = nn.MSELoss()
         elif loss_type == "l1":
@@ -168,6 +247,16 @@ class FMPolicy(ComposerModel, BasePolicy):
     def set_num_k_infer(self, num_k_infer: int):
         self.num_k_infer = num_k_infer
         return
+
+    def _slice_velocity(self, vel_full: torch.Tensor) -> torch.Tensor:
+        """UNet may be built with output_dim=y_dim; still assert and slice to action channels."""
+        D = int(self.y_dim)
+        assert vel_full.shape[-1] >= D, (
+            f"diffusion_net output dim {vel_full.shape[-1]} < y_dim={D}"
+        )
+        vel = vel_full[..., :D]
+        assert vel.shape[-1] == D
+        return vel
 
     def set_flow_schedule(self, flow_schedule: str, exp_scale: float):
         self.flow_schedule = flow_schedule
@@ -344,7 +433,7 @@ class FMPolicy(ComposerModel, BasePolicy):
         target_vel = z1 - z0
         timesteps = t.squeeze() * self.pos_emb_scale if self.time_conditioning else None
         pred_vel_full = self.diffusion_net(z_t, timesteps, global_cond=nx)
-        pred_vel = pred_vel_full[..., :D]  # predict velocity only for original action channels
+        pred_vel = self._slice_velocity(pred_vel_full)
         per_xyz, per_rot6d, per_grip = self._per_timestep_loss(pred_vel, target_vel)
         weights = self._compute_gripper_weights(ny)
 
@@ -409,7 +498,6 @@ class FMPolicy(ComposerModel, BasePolicy):
         B = nx.shape[0]
         z = self._init_noise(B) if noise is None else noise
         traj = [z]
-        D = int(self.y_dim)
         phase_seq = None
         if self.phase_enabled:
             # If phase not provided, use heuristic over horizon based on current gripper state.
@@ -454,7 +542,7 @@ class FMPolicy(ComposerModel, BasePolicy):
             else:
                 z_in = z
             vel_full = self.diffusion_net(z_in, timesteps, global_cond=nx)
-            vel = vel_full[..., :D]
+            vel = self._slice_velocity(vel_full)
             z = z.detach().clone() + vel * dt[i]
             traj.append(z)
 
