@@ -41,6 +41,7 @@ except Exception as e:  # pragma: no cover
 from pfp import DEVICE, DATA_DIRS, REPO_DIRS, set_seeds
 from pfp.data.dataset_pcd import RobotDatasetPcd
 from pfp.data.dataset_images import RobotDatasetImages
+from pfp.policy.fm_policy import log_state_dict_load
 
 
 if hasattr(ts, "add_safe_globals"):
@@ -301,7 +302,15 @@ def main(cfg: OmegaConf):
         print(f"[resume] Loading model weights from {ckpt_fpath}")
         state_dict = torch.load(ckpt_fpath, map_location=DEVICE, weights_only=False)
         # Same layout as in FMPolicy.load_from_checkpoint: state['state']['model']
-        composer_model.load_state_dict(state_dict["state"]["model"], strict=False)
+        _pcfg = getattr(cfg, "phase_conditioning", None)
+        _pe = bool(getattr(_pcfg, "enabled", False)) if _pcfg is not None else False
+        log_state_dict_load(
+            composer_model,
+            state_dict["state"]["model"],
+            strict=False,
+            tag="resume",
+            phase_enabled=_pe,
+        )
         print("[resume] Weights loaded into composer_model")
 
     optimizer = hydra.utils.instantiate(cfg.optimizer, composer_model.parameters())

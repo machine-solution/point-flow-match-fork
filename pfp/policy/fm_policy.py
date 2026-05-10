@@ -1,9 +1,11 @@
 from __future__ import annotations
+import functools
+import sys
 import hydra
 import torch
 import torch.nn as nn
 import pypose as pp
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from composer.models import ComposerModel
 from pfp.policy.base_policy import BasePolicy
 from pfp import DEVICE, REPO_DIRS
@@ -17,6 +19,79 @@ from pfp.common.phase_utils import (
 )
 
 
+def build_diffusion_net_unet(
+    diffusion_net: nn.Module | functools.partial | DictConfig | dict,
+    *,
+    input_dim: int,
+    output_dim: int,
+) -> nn.Module:
+    """
+    Construct ConditionalUnet1D with runtime channel sizes.
+
+    Hydra normally passes a functools.partial when config uses ``_partial_: true``; tests may pass
+    an already-built module.
+    """
+    if isinstance(diffusion_net, nn.Module):
+        return diffusion_net
+    if isinstance(diffusion_net, functools.partial):
+        return diffusion_net(input_dim=input_dim, output_dim=output_dim)
+    if isinstance(diffusion_net, DictConfig) or isinstance(diffusion_net, dict):
+        return hydra.utils.instantiate(diffusion_net, input_dim=input_dim, output_dim=output_dim)
+    raise TypeError(f"diffusion_net must be nn.Module, functools.partial, or DictConfig; got {type(diffusion_net)}")
+
+
+def log_state_dict_load(
+    module: nn.Module,
+    state_dict: dict,
+    *,
+    strict: bool = False,
+    tag: str = "load",
+    phase_enabled: bool | None = None,
+) -> tuple[list[str], list[str]]:
+    """load_state_dict(strict=False) with stderr diagnostics for silent-compat loads."""
+    incompatible = module.load_state_dict(state_dict, strict=strict)
+    missing = list(incompatible.missing_keys)
+    unexpected = list(incompatible.unexpected_keys)
+
+    def _emit(title: str, keys: list[str]) -> None:
+        if not keys:
+            return
+        print(f"[checkpoint:{tag}] WARNING: {title} ({len(keys)} keys):", file=sys.stderr)
+        show = keys[:80]
+        for k in show:
+            print(f"  - {k}", file=sys.stderr)
+        if len(keys) > len(show):
+            print(f"  ... and {len(keys) - len(show)} more", file=sys.stderr)
+
+    _emit("missing_keys", missing)
+    _emit("unexpected_keys", unexpected)
+
+    if phase_enabled is not None:
+        miss_phase_embed = any(k.startswith("phase_embedding.") for k in missing)
+        unexp_phase_embed = any(k.startswith("phase_embedding.") for k in unexpected)
+        miss_diffusion = any(k.startswith("diffusion_net.") for k in missing)
+        if phase_enabled and miss_phase_embed:
+            print(
+                f"[checkpoint:{tag}] WARNING: loading into phase-conditioned model but checkpoint "
+                f"has no phase_embedding weights (likely baseline checkpoint). Phase embedding stays randomly initialized.",
+                file=sys.stderr,
+            )
+        if not phase_enabled and unexp_phase_embed:
+            print(
+                f"[checkpoint:{tag}] WARNING: checkpoint contains phase_embedding weights but "
+                f"current model has phase conditioning disabled; unexpected phase keys ignored.",
+                file=sys.stderr,
+            )
+        if phase_enabled and miss_diffusion:
+            print(
+                f"[checkpoint:{tag}] WARNING: diffusion_net keys missing — often baseline→phase "
+                f"with mismatched UNet channel widths; verify training/inference use compatible checkpoints.",
+                file=sys.stderr,
+            )
+
+    return missing, unexpected
+
+
 class FMPolicy(ComposerModel, BasePolicy):
     def __init__(
         self,
@@ -27,7 +102,7 @@ class FMPolicy(ComposerModel, BasePolicy):
         num_k_infer: int,
         time_conditioning: bool,
         obs_encoder: nn.Module,
-        diffusion_net: nn.Module,
+        diffusion_net: nn.Module | functools.partial | DictConfig | dict,
         augment_data: bool = False,
         loss_weights: dict[int] = None,
         pos_emb_scale: int = 20,
@@ -54,7 +129,6 @@ class FMPolicy(ComposerModel, BasePolicy):
         self.num_k_infer = num_k_infer
         self.time_conditioning = time_conditioning
         self.obs_encoder = obs_encoder
-        self.diffusion_net = diffusion_net
         self.norm_pcd_center = norm_pcd_center
         self.augment_data = augment_data
         self.noise_type = noise_type
@@ -74,6 +148,15 @@ class FMPolicy(ComposerModel, BasePolicy):
             self.phase_embedding = nn.Embedding(self.phase_cfg.num_phases, self.phase_cfg.phase_embed_dim)
         else:
             self.phase_embedding = None
+        effective_input_dim = int(y_dim)
+        if self.phase_enabled:
+            effective_input_dim += int(self.phase_cfg.phase_embed_dim)
+        self.diffusion_net = build_diffusion_net_unet(
+            diffusion_net,
+            input_dim=effective_input_dim,
+            output_dim=int(y_dim),
+        )
+        self.diffusion_net_input_dim = effective_input_dim
         if loss_type == "l2":
             self.loss_fun = nn.MSELoss()
         elif loss_type == "l1":
@@ -406,8 +489,15 @@ class FMPolicy(ComposerModel, BasePolicy):
         # cfg.model.obs_encoder.encoder.random_crop = False
         cfg.model.subs_factor = subs_factor
         assert cfg.model._target_.split(".")[-1] == cls.__name__
-        model: FMPolicy = hydra.utils.instantiate(cfg.model)
-        model.load_state_dict(state_dict["state"]["model"], strict=False)
+        pcfg = getattr(cfg, "phase_conditioning", None)
+        model: FMPolicy = hydra.utils.instantiate(cfg.model, phase_conditioning=pcfg)
+        log_state_dict_load(
+            model,
+            state_dict["state"]["model"],
+            strict=False,
+            tag=f"{ckpt_name}/{ckpt_episode}",
+            phase_enabled=bool(getattr(pcfg, "enabled", False)) if pcfg is not None else False,
+        )
         model.to(DEVICE)
         # Ensure model is in float32 (model.to() should handle this, but ensure it)
         model = model.float()
