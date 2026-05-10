@@ -249,6 +249,9 @@ def main(cfg: OmegaConf):
         dataset_valid = (
             RobotDatasetImages(data_path_valid, phase_conditioning=getattr(cfg, "phase_conditioning", None), **cfg.dataset) if use_val else None
         )
+    else:
+        raise ValueError(f"Unknown observation mode: {cfg.obs_mode}")
+
     # Phase conditioning logging (optional)
     pcfg = getattr(cfg, "phase_conditioning", None)
     if pcfg is not None and bool(getattr(pcfg, "enabled", False)):
@@ -261,9 +264,6 @@ def main(cfg: OmegaConf):
                 print(f"[phase] phase_fracs={stats.get('phase_fracs')} avg_grasp_timestep={stats.get('avg_grasp_timestep')}")
         except Exception as e:
             print(f"[phase] warning: could not compute dataset phase stats: {e}")
-
-    else:
-        raise ValueError(f"Unknown observation mode: {cfg.obs_mode}")
     print("[memory] after dataset_train" + (", dataset_valid" if use_val else ""))
     _log_gpu_memory("after datasets")
 

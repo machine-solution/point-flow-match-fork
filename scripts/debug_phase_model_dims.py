@@ -78,9 +78,11 @@ def main() -> None:
 
         B = 2
         T = int(cfg.n_pred_steps)
+        n_obs = int(cfg.n_obs_steps)
         npt = int(cfg.dataset.n_points)
-        pcd = torch.randn(B, npt, 3)
-        rs_obs = torch.randn(B, int(cfg.n_obs_steps), y_dim)
+        # Match RobotDatasetPcd + PointNetBackbone: pcd is (B, n_obs_steps, P, C)
+        pcd = torch.randn(B, n_obs, npt, 3)
+        rs_obs = torch.randn(B, n_obs, y_dim)
         rs_pred = torch.randn(B, T, y_dim)
         phase = torch.randint(0, int(getattr(pcfg, "num_phases", 3)), (B, T), dtype=torch.long)
 
