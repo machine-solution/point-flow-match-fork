@@ -33,37 +33,79 @@ def _unet_stem_in_channels(unet: nn.Module) -> int | None:
     return None
 
 
+def _unet_final_out_channels(unet: nn.Module) -> int | None:
+    """ConditionalUnet1D final Conv1d out_channels (full vector field width; equals input_dim for vanilla net)."""
+    try:
+        fc = unet.final_conv[-1]
+        if isinstance(fc, nn.Conv1d):
+            return int(fc.out_channels)
+    except Exception:
+        return None
+    return None
+
+
+def _instantiate_diffusion_drop_legacy_output_dim(
+    diffusion_net: functools.partial | DictConfig | dict,
+    *,
+    input_dim: int,
+) -> nn.Module:
+    """
+    Vanilla diffusion_policy ConditionalUnet1D matches output width to input width when output_dim
+    is omitted. Strip any legacy ``output_dim`` from Hydra partial/config so we always get a
+    full [D+E]-channel field and slice the first D channels for velocity in FMPolicy.
+    """
+    if isinstance(diffusion_net, functools.partial):
+        kw = dict(diffusion_net.keywords)
+        kw.pop("output_dim", None)
+        kw["input_dim"] = input_dim
+        return diffusion_net.func(*diffusion_net.args, **kw)
+
+    if isinstance(diffusion_net, DictConfig) or isinstance(diffusion_net, dict):
+        container = OmegaConf.to_container(diffusion_net, resolve=True)
+        if isinstance(container, dict):
+            container.pop("output_dim", None)
+            # Nested configs often keep ``_partial_: true``; completing with input_dim must yield a
+            # full module, not another partial.
+            if container.get("_partial_") is True:
+                container["_partial_"] = False
+            cfg = OmegaConf.create(container)
+            return hydra.utils.instantiate(cfg, input_dim=input_dim)
+
+    raise TypeError(f"expected partial or DictConfig/dict; got {type(diffusion_net)}")
+
+
 def instantiate_diffusion_net_for_fm(
     diffusion_net: nn.Module | functools.partial | DictConfig | dict,
     *,
     input_dim: int,
-    output_dim: int,
 ) -> tuple[nn.Module, str]:
     """
     Build ConditionalUnet1D for FMPolicy.
 
-    Hydra with ``_partial_: true`` passes a ``functools.partial`` bound to the class; **calling**
-    the partial with ``input_dim`` / ``output_dim`` produces a real ``nn.Module``. Passing a bare
-    partial through as ``self.diffusion_net`` would break forward (the partial would be invoked as
-    if it were the network).
+    Only ``input_dim`` is passed through to the UNet. Standard ConditionalUnet1D uses the same
+    channel width for input and output; phase conditioning uses ``input_dim = D + E`` and the
+    extra output channels are discarded — only ``[..., :D]`` is used as the action velocity.
+
+    Hydra with ``_partial_: true`` passes a ``functools.partial``; completing it yields a real
+    ``nn.Module`` (never leave a bare partial as ``self.diffusion_net``).
     """
     if isinstance(diffusion_net, nn.Module):
         return diffusion_net, "already nn.Module"
 
-    if isinstance(diffusion_net, DictConfig) or isinstance(diffusion_net, dict):
-        m = hydra.utils.instantiate(diffusion_net, input_dim=input_dim, output_dim=output_dim)
-        if not isinstance(m, nn.Module):
-            raise TypeError(f"instantiated diffusion_net is not nn.Module: {type(m)}")
-        return m, "hydra.utils.instantiate(DictConfig|dict)"
-
     if isinstance(diffusion_net, functools.partial):
-        m = diffusion_net(input_dim=input_dim, output_dim=output_dim)
+        m = _instantiate_diffusion_drop_legacy_output_dim(diffusion_net, input_dim=input_dim)
         if not isinstance(m, nn.Module):
             raise TypeError(f"partial did not return nn.Module: {type(m)}")
-        return m, "functools.partial(...) completed"
+        return m, "functools.partial(...) completed (output_dim stripped if present)"
+
+    if isinstance(diffusion_net, DictConfig) or isinstance(diffusion_net, dict):
+        m = _instantiate_diffusion_drop_legacy_output_dim(diffusion_net, input_dim=input_dim)
+        if not isinstance(m, nn.Module):
+            raise TypeError(f"instantiated diffusion_net is not nn.Module: {type(m)}")
+        return m, "hydra.utils.instantiate(DictConfig|dict, output_dim stripped if present)"
 
     if callable(diffusion_net):
-        m = diffusion_net(input_dim=input_dim, output_dim=output_dim)
+        m = diffusion_net(input_dim=input_dim)
         if not isinstance(m, nn.Module):
             raise TypeError(f"callable did not return nn.Module: {type(m)}")
         return m, "callable constructor"
@@ -208,7 +250,6 @@ class FMPolicy(ComposerModel, BasePolicy):
         self.diffusion_net, ctor_src = instantiate_diffusion_net_for_fm(
             diffusion_net,
             input_dim=effective_input_dim,
-            output_dim=int(y_dim),
         )
         self._diffusion_net_ctor_source = ctor_src
         self.diffusion_net_input_dim = effective_input_dim
@@ -219,13 +260,19 @@ class FMPolicy(ComposerModel, BasePolicy):
             raise AssertionError(
                 f"UNet stem in_channels={stem_in} != effective_input_dim={effective_input_dim}"
             )
+        final_out = _unet_final_out_channels(self.diffusion_net)
+        if final_out is not None and final_out != effective_input_dim:
+            raise AssertionError(
+                f"UNet final out_channels={final_out} != effective_input_dim={effective_input_dim} "
+                f"(vanilla ConditionalUnet1D uses same width for input and full output field)"
+            )
 
         print(
             f"[FMPolicy] diffusion_net: {ctor_src}\n"
             f"  phase_conditioning.enabled={self.phase_enabled}  y_dim={y_dim}  "
             f"phase_embed_dim={int(self.phase_cfg.phase_embed_dim) if self.phase_enabled else 0}\n"
-            f"  effective_input_dim (sample channels)={effective_input_dim}  "
-            f"velocity output_dim={int(y_dim)}",
+            f"  UNet full field width (in/out)={effective_input_dim}  "
+            f"action velocity uses first {int(y_dim)} channels only",
             file=sys.stderr,
         )
         logger.info(
@@ -249,11 +296,16 @@ class FMPolicy(ComposerModel, BasePolicy):
         return
 
     def _slice_velocity(self, vel_full: torch.Tensor) -> torch.Tensor:
-        """UNet may be built with output_dim=y_dim; still assert and slice to action channels."""
+        """
+        Vanilla ConditionalUnet1D outputs the same channel width as ``input_dim`` (D or D+E).
+        Only the first D channels are physical action velocity; any extra channels are discarded.
+        """
         D = int(self.y_dim)
-        assert vel_full.shape[-1] >= D, (
-            f"diffusion_net output dim {vel_full.shape[-1]} < y_dim={D}"
+        io = int(self.diffusion_net_input_dim)
+        assert vel_full.shape[-1] == io, (
+            f"UNet output width {vel_full.shape[-1]} != diffusion_net_input_dim={io}"
         )
+        assert vel_full.shape[-1] >= D
         vel = vel_full[..., :D]
         assert vel.shape[-1] == D
         return vel
@@ -417,8 +469,9 @@ class FMPolicy(ComposerModel, BasePolicy):
         t = self._sample_snr(B)
         z0 = self._init_noise(ny.shape[0])
         z1 = ny
-        z_t = t * z1 + (1.0 - t) * z0
+        z_flow = t * z1 + (1.0 - t) * z0
         D = int(self.y_dim)
+        assert z_flow.shape[-1] == D
         if self.phase_enabled:
             if phase is None:
                 raise ValueError("phase_conditioning.enabled=true requires phase labels in calculate_loss().")
@@ -429,7 +482,10 @@ class FMPolicy(ComposerModel, BasePolicy):
             if torch.any((phase < 0) | (phase >= self.phase_cfg.num_phases)):
                 raise ValueError("phase has values outside [0, num_phases-1].")
             phase_emb = self.phase_embedding(phase)  # (B,T,E)
-            z_t = torch.cat([z_t, phase_emb], dim=-1)  # (B,T,D+E)
+            z_t = torch.cat([z_flow, phase_emb], dim=-1)  # (B,T,D+E)
+            assert z_t.shape[-1] == D + int(self.phase_cfg.phase_embed_dim)
+        else:
+            z_t = z_flow
         target_vel = z1 - z0
         timesteps = t.squeeze() * self.pos_emb_scale if self.time_conditioning else None
         pred_vel_full = self.diffusion_net(z_t, timesteps, global_cond=nx)
@@ -532,18 +588,23 @@ class FMPolicy(ComposerModel, BasePolicy):
                     phase_seq = phase
             if phase_seq.shape != (B, self.n_pred_steps):
                 raise ValueError(f"phase must broadcast to (B,T)={(B,self.n_pred_steps)}, got {tuple(phase_seq.shape)}")
+        D = int(self.y_dim)
+        E = int(self.phase_cfg.phase_embed_dim) if self.phase_enabled else 0
         t0, dt = get_timesteps(self.flow_schedule, self.num_k_infer, exp_scale=self.exp_scale)
         for i in range(self.num_k_infer):
+            assert z.shape[-1] == D
             timesteps = torch.ones((B), device=DEVICE) * t0[i]
             timesteps *= self.pos_emb_scale
             if self.phase_enabled:
                 phase_emb = self.phase_embedding(phase_seq)  # (B,T,E)
                 z_in = torch.cat([z, phase_emb], dim=-1)  # (B,T,D+E)
+                assert z_in.shape[-1] == D + E
             else:
                 z_in = z
             vel_full = self.diffusion_net(z_in, timesteps, global_cond=nx)
             vel = self._slice_velocity(vel_full)
             z = z.detach().clone() + vel * dt[i]
+            assert z.shape[-1] == D
             traj.append(z)
 
         if return_traj:

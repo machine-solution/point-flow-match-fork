@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sanity check: ConditionalUnet1D input channels vs phase conditioning; one forward pass."""
+"""Sanity check: phase-conditioned flow — UNet I/O width, sliced velocity, D-only state."""
 from __future__ import annotations
 
 import argparse
@@ -12,10 +12,10 @@ from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from pfp.policy.fm_policy import _unet_stem_in_channels
+from pfp.policy.fm_policy import _unet_final_out_channels, _unet_stem_in_channels
 
 
-def _expected_input_dim(*, y_dim: int, phase_enabled: bool, phase_embed_dim: int) -> int:
+def _expected_io_dim(*, y_dim: int, phase_enabled: bool, phase_embed_dim: int) -> int:
     d = int(y_dim)
     if phase_enabled:
         d += int(phase_embed_dim)
@@ -28,7 +28,7 @@ def main() -> None:
         "--config-dir",
         type=Path,
         default=None,
-        help="Path to conf/ (default: ../conf relative to repo root)",
+        help="Path to conf/ (default: repo/conf)",
     )
     args = ap.parse_args()
 
@@ -51,7 +51,7 @@ def main() -> None:
         enabled = bool(getattr(pcfg, "enabled", False))
         embed_d = int(getattr(pcfg, "phase_embed_dim", 0))
         y_dim = int(cfg.y_dim)
-        exp_in = _expected_input_dim(
+        exp_io = _expected_io_dim(
             y_dim=y_dim, phase_enabled=enabled, phase_embed_dim=embed_d
         )
 
@@ -60,44 +60,64 @@ def main() -> None:
         assert isinstance(model.diffusion_net, nn.Module), "diffusion_net must be nn.Module"
         ctor = getattr(model, "_diffusion_net_ctor_source", "?")
         print(f"  ctor: {ctor}")
-        actual_in = int(getattr(model, "diffusion_net_input_dim", -1))
+        actual_in_attr = int(getattr(model, "diffusion_net_input_dim", -1))
         stem_in = _unet_stem_in_channels(model.diffusion_net)
-        print(f"  UNet stem in_channels (from first conv) = {stem_in}")
-        if stem_in is not None and stem_in != exp_in:
-            print("  ERROR: stem in_channels != expected input_dim", file=sys.stderr)
-            sys.exit(1)
-
-        out_ch = None
-        fc = getattr(model.diffusion_net, "final_conv", None)
-        if fc is not None:
-            last = list(fc.children())[-1]
-            if hasattr(last, "out_channels"):
-                out_ch = int(last.out_channels)
+        final_out = _unet_final_out_channels(model.diffusion_net)
+        print(f"  UNet stem in_channels = {stem_in}")
+        print(f"  UNet final_conv out_channels = {final_out}")
 
         print(f"\n=== {label} ===")
-        print(f"  y_dim={y_dim}  phase_enabled={enabled}  phase_embed_dim={embed_d}")
-        print(f"  expected diffusion_net input_dim = {exp_in}")
-        print(f"  actual   diffusion_net_input_dim   = {actual_in}")
-        print(f"  UNet final_conv out_channels (if any) = {out_ch}")
+        print(
+            f"  y_dim (D)={y_dim}  phase_enabled={enabled}  "
+            f"phase_embed_dim (used if enabled)={(embed_d if enabled else 0)}"
+        )
+        print(f"  expected full field width (D or D+E) = {exp_io}")
+        print(f"  model.diffusion_net_input_dim      = {actual_in_attr}")
 
-        if actual_in != exp_in:
-            print("  ERROR: input_dim mismatch", file=sys.stderr)
+        if actual_in_attr != exp_io:
+            print("  ERROR: diffusion_net_input_dim mismatch", file=sys.stderr)
             sys.exit(1)
-        if out_ch is not None and out_ch != y_dim:
-            print(f"  ERROR: output channels {out_ch} != y_dim {y_dim}", file=sys.stderr)
+        if stem_in is not None and stem_in != exp_io:
+            print("  ERROR: stem in_channels mismatch", file=sys.stderr)
+            sys.exit(1)
+        if final_out is not None and final_out != exp_io:
+            print(
+                f"  ERROR: final out_channels {final_out} != expected full width {exp_io}",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
         B = 2
         T = int(cfg.n_pred_steps)
         n_obs = int(cfg.n_obs_steps)
         npt = int(cfg.dataset.n_points)
-        # Match RobotDatasetPcd + PointNetBackbone: pcd is (B, n_obs_steps, P, C)
         pcd = torch.randn(B, n_obs, npt, 3)
         rs_obs = torch.randn(B, n_obs, y_dim)
         rs_pred = torch.randn(B, T, y_dim)
         phase = torch.randint(0, int(getattr(pcfg, "num_phases", 3)), (B, T), dtype=torch.long)
 
         with torch.no_grad():
+            nx = model.obs_encoder(pcd, rs_obs)
+            t = torch.rand(B, 1, 1, device=nx.device)
+            z0 = torch.randn(B, T, y_dim, device=nx.device)
+            z1 = rs_pred.to(nx.device)
+            z_flow = t * z1 + (1.0 - t) * z0
+            assert z_flow.shape[-1] == y_dim
+            if enabled:
+                pe = model.phase_embedding(phase.to(nx.device))
+                z_cond = torch.cat([z_flow, pe], dim=-1)
+                assert z_cond.shape[-1] == y_dim + embed_d
+            else:
+                z_cond = z_flow
+                assert z_cond.shape[-1] == y_dim
+            ts = t.squeeze(-1).squeeze(-1) * model.pos_emb_scale if model.time_conditioning else None
+            pred_full = model.diffusion_net(z_cond, ts, global_cond=nx)
+            pred_vel = pred_full[..., :y_dim]
+            print(f"  [probe] z_flow {tuple(z_flow.shape)}  z_cond {tuple(z_cond.shape)}")
+            print(f"  [probe] pred_full {tuple(pred_full.shape)}  pred_vel {tuple(pred_vel.shape)}")
+            assert pred_full.shape[-1] == exp_io
+            assert pred_vel.shape[-1] == y_dim
+
             if enabled:
                 loss_xyz, loss_rot6d, loss_grip = model.calculate_loss(
                     pcd, rs_obs, rs_pred, phase=phase
@@ -110,12 +130,12 @@ def main() -> None:
                 pred = model.infer_y(pcd, rs_obs, phase=None)
 
         print(f"  calculate_loss ok (xyz={float(loss_xyz):.4f} ...)")
-        print(f"  infer_y output shape = {tuple(pred.shape)}  (expect ({B}, {T}, {y_dim}))")
+        print(f"  infer_y state shape = {tuple(pred.shape)}  (expect ({B}, {T}, {y_dim}), D-only)")
         if tuple(pred.shape) != (B, T, y_dim):
             print("  ERROR: infer_y shape mismatch", file=sys.stderr)
             sys.exit(1)
 
-    print("\nOK: baseline and phase models built; UNet I/O dims match expectations.")
+    print("\nOK: baseline and phase models; UNet full width matches input; velocity/state stay D.")
 
 
 if __name__ == "__main__":
