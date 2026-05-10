@@ -186,6 +186,11 @@ The phase labels are generated from demonstrations using a simple heuristic over
 - set phase `1` in a `contact_window` around it
 - set phase `2` after the window
 
+Implementation note: phase conditioning is done as **true conditioning input** to the velocity network,
+not by adding a phase-dependent bias to the trajectory state \(x_t\). Concretely, we concatenate a
+per-timestep phase embedding to the sample input of the diffusion network and slice the output so the
+network still predicts velocity only for the original action dimensions.
+
 Enable it via the Hydra config group `phase_conditioning`:
 
 ```bash
@@ -213,6 +218,13 @@ PYTHONPATH=../diffusion_policy python scripts/debug_phase_labels.py \
   --thr 0.5 \
   --contact-window 2 \
   --out outputs/debug_phase_labels.png
+```
+
+Debugging a forward pass (tensor shapes + one `infer_y`) for phase-enabled/disabled:
+
+```bash
+PYTHONPATH=../diffusion_policy python scripts/debug_phase_forward.py --phase enabled
+PYTHONPATH=../diffusion_policy python scripts/debug_phase_forward.py --phase disabled
 ```
 
 ### `open_fridge` datasets: commands (cluster / VM)

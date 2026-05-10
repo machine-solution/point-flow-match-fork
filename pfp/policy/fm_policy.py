@@ -72,10 +72,8 @@ class FMPolicy(ComposerModel, BasePolicy):
         self.phase_enabled = bool(self.phase_cfg.enabled)
         if self.phase_enabled:
             self.phase_embedding = nn.Embedding(self.phase_cfg.num_phases, self.phase_cfg.phase_embed_dim)
-            self.phase_to_y = nn.Linear(self.phase_cfg.phase_embed_dim, y_dim)
         else:
             self.phase_embedding = None
-            self.phase_to_y = None
         if loss_type == "l2":
             self.loss_fun = nn.MSELoss()
         elif loss_type == "l1":
@@ -248,6 +246,7 @@ class FMPolicy(ComposerModel, BasePolicy):
         z0 = self._init_noise(ny.shape[0])
         z1 = ny
         z_t = t * z1 + (1.0 - t) * z0
+        D = int(self.y_dim)
         if self.phase_enabled:
             if phase is None:
                 raise ValueError("phase_conditioning.enabled=true requires phase labels in calculate_loss().")
@@ -258,10 +257,11 @@ class FMPolicy(ComposerModel, BasePolicy):
             if torch.any((phase < 0) | (phase >= self.phase_cfg.num_phases)):
                 raise ValueError("phase has values outside [0, num_phases-1].")
             phase_emb = self.phase_embedding(phase)  # (B,T,E)
-            z_t = z_t + self.phase_to_y(phase_emb)  # (B,T,y_dim)
+            z_t = torch.cat([z_t, phase_emb], dim=-1)  # (B,T,D+E)
         target_vel = z1 - z0
         timesteps = t.squeeze() * self.pos_emb_scale if self.time_conditioning else None
-        pred_vel = self.diffusion_net(z_t, timesteps, global_cond=nx)
+        pred_vel_full = self.diffusion_net(z_t, timesteps, global_cond=nx)
+        pred_vel = pred_vel_full[..., :D]  # predict velocity only for original action channels
         per_xyz, per_rot6d, per_grip = self._per_timestep_loss(pred_vel, target_vel)
         weights = self._compute_gripper_weights(ny)
 
@@ -300,7 +300,8 @@ class FMPolicy(ComposerModel, BasePolicy):
         )
 
         # Eval metrics
-        pred_y = self.infer_y(pcd, robot_state_obs, phase=None)
+        # Offline eval: if phase labels exist in the dataset, use them consistently.
+        pred_y = self.infer_y(pcd, robot_state_obs, phase=phase_pred)
         mse_xyz = nn.functional.mse_loss(pred_y[..., :3], robot_state_pred[..., :3])
         mse_rot6d = nn.functional.mse_loss(pred_y[..., 3:9], robot_state_pred[..., 3:9])
         mse_grip = nn.functional.mse_loss(pred_y[..., 9], robot_state_pred[..., 9])
@@ -325,6 +326,7 @@ class FMPolicy(ComposerModel, BasePolicy):
         B = nx.shape[0]
         z = self._init_noise(B) if noise is None else noise
         traj = [z]
+        D = int(self.y_dim)
         phase_seq = None
         if self.phase_enabled:
             # If phase not provided, use heuristic over horizon based on current gripper state.
@@ -363,12 +365,14 @@ class FMPolicy(ComposerModel, BasePolicy):
         for i in range(self.num_k_infer):
             timesteps = torch.ones((B), device=DEVICE) * t0[i]
             timesteps *= self.pos_emb_scale
-            z_in = z
             if self.phase_enabled:
                 phase_emb = self.phase_embedding(phase_seq)  # (B,T,E)
-                z_in = z_in + self.phase_to_y(phase_emb)
-            vel_pred = self.diffusion_net(z_in, timesteps, global_cond=nx)
-            z = z.detach().clone() + vel_pred * dt[i]
+                z_in = torch.cat([z, phase_emb], dim=-1)  # (B,T,D+E)
+            else:
+                z_in = z
+            vel_full = self.diffusion_net(z_in, timesteps, global_cond=nx)
+            vel = vel_full[..., :D]
+            z = z.detach().clone() + vel * dt[i]
             traj.append(z)
 
         if return_traj:

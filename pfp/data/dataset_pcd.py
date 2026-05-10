@@ -14,7 +14,12 @@ def rand_range(low: float, high: float, size: tuple[int], device) -> torch.Tenso
 
 
 def augment_pcd_data(batch: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
-    pcd, robot_state_obs, robot_state_pred = batch
+    """
+    Augment (pcd, robot_state_obs, robot_state_pred) with a random SE(3) transform.
+
+    Supports optional extra tensors (e.g. phase labels) by passing them through unchanged.
+    """
+    pcd, robot_state_obs, robot_state_pred = batch[:3]
     BT_robot_obs = robot_state_obs.shape[:-1]
     BT_robot_pred = robot_state_pred.shape[:-1]
 
@@ -32,7 +37,10 @@ def augment_pcd_data(batch: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...
     # We shuffle the points, i.e. shuffle pcd along dim=2 (B, T, P, 3)
     idx = torch.randperm(pcd.shape[2])
     pcd = pcd[:, :, idx, :]
-    return pcd, robot_state_obs, robot_state_pred
+    if len(batch) <= 3:
+        return pcd, robot_state_obs, robot_state_pred
+    # Pass-through extras (e.g. phase) unchanged.
+    return (pcd, robot_state_obs, robot_state_pred, *batch[3:])
 
 
 class RobotDatasetPcd(torch.utils.data.Dataset):

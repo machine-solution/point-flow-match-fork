@@ -18,7 +18,9 @@
   
   diffusion_net:
     _target_: diffusion_policy.model.diffusion.conditional_unet1d.ConditionalUnet1D
-    input_dim: ${y_dim}
+    # When phase conditioning is enabled, phase embedding is concatenated to sample input.
+    # The network still predicts velocity only for the original y_dim channels (we slice it).
+    input_dim: "${eval: '${y_dim} + ${phase_conditioning.phase_embed_dim} if ${phase_conditioning.enabled} else ${y_dim}'}"
     global_cond_dim: "${eval: '${x_dim} * ${n_obs_steps}'}"
     diffusion_step_embed_dim: "${eval: '256 if ${model.time_conditioning} else 0'}"
     down_dims: [256, 512, 1024]
