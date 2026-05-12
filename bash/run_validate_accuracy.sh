@@ -7,18 +7,32 @@
 #   bash bash/run_validate_accuracy.sh
 #   bash bash/run_validate_accuracy.sh open_fridge_0103_1500_resume
 #
-# RLBench требует CoppeliaSim 4.1.0 (не 4.10). Если не задан COPPELIASIM_ROOT,
-# скрипт подставит CoppeliaSim_Edu_V4_1_0_Ubuntu20_04 из корня репо (если есть).
+# RLBench: по умолчанию подставляется CoppeliaSim 4.1.0 из корня репо (см. блок COPPELIASIM_ROOT ниже).
 
 set -e
+set -o pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# CoppeliaSim 4.1 для RLBench (иначе Handle Panda does not exist)
-if [ -z "${COPPELIASIM_ROOT}" ] && [ -d "$REPO_ROOT/CoppeliaSim_Edu_V4_1_0_Ubuntu20_04" ]; then
-    export COPPELIASIM_ROOT="$REPO_ROOT/CoppeliaSim_Edu_V4_1_0_Ubuntu20_04"
+# RLBench / collect_demos ожидают CoppeliaSim 4.1.0. Если в окружении стоит 4.10+ (например
+# ~/CoppeliaSim), PyRep часто падает с heap corruption ("free(): invalid next size").
+# По умолчанию принудительно берём 4.1.0 из корня репо, если папка есть.
+# Чтобы оставить свой COPPELIASIM_ROOT:  PFP_SKIP_REPO_COPPELIASIM=1 bash bash/run_validate_accuracy.sh ...
+CS41="$REPO_ROOT/CoppeliaSim_Edu_V4_1_0_Ubuntu20_04"
+if [ -d "$CS41" ] && [ -z "${PFP_SKIP_REPO_COPPELIASIM:-}" ]; then
+    if [ -n "${COPPELIASIM_ROOT:-}" ] && [ "${COPPELIASIM_ROOT}" != "$CS41" ]; then
+        echo "[run_validate_accuracy] Overriding COPPELIASIM_ROOT (was: ${COPPELIASIM_ROOT}) -> ${CS41}"
+    fi
+    export COPPELIASIM_ROOT="$CS41"
     export LD_LIBRARY_PATH="${COPPELIASIM_ROOT}:${LD_LIBRARY_PATH:-}"
     export QT_QPA_PLATFORM_PLUGIN_PATH="${COPPELIASIM_ROOT}"
+elif [ -z "${COPPELIASIM_ROOT:-}" ] && [ -d "$CS41" ]; then
+    export COPPELIASIM_ROOT="$CS41"
+    export LD_LIBRARY_PATH="${COPPELIASIM_ROOT}:${LD_LIBRARY_PATH:-}"
+    export QT_QPA_PLATFORM_PLUGIN_PATH="${COPPELIASIM_ROOT}"
+fi
+if [ -n "${COPPELIASIM_ROOT:-}" ]; then
+    echo "[run_validate_accuracy] COPPELIASIM_ROOT=${COPPELIASIM_ROOT}"
 fi
 
 # Имя чекпоинта: первый аргумент или дефолт
@@ -56,11 +70,22 @@ OUTPUT_FILE="$RESULTS_DIR/validate_accuracy_${CKPT_NAME}_$(date +%Y%m%d_%H%M%S).
 echo "Checkpoint: $CKPT_NAME | Episodes: $NUM_EPISODES | Output: $OUTPUT_FILE"
 echo "---"
 
-# Запуск через conda run, чтобы гарантированно использовать Python из env
-conda run -n "$CONDA_ENV" python scripts/validate_accuracy.py \
-    policy.ckpt_name="$CKPT_NAME" \
-    env_runner.num_episodes="$NUM_EPISODES" \
-    2>&1 | tee "$OUTPUT_FILE"
+# Прогресс tqdm в консоли пропадает, если stdout не TTY (типично при `| tee`).
+# util-linux `script` выдаёт дочернему процессу псевдо-TTY — tqdm рисуется в терминале,
+# тот же поток дублируем в файл через tee.
+export PYTHONUNBUFFERED=1
+
+# НЕ писать «conda run ... env VAR=1 python»: conda воспринимает «env» как команду внутри env.
+# PYTHONUNBUFFERED уже export выше — наследуется дочерним shell и conda run.
+VAL_CMD="cd $(printf '%q' "$REPO_ROOT") && conda run --no-capture-output -n $(printf '%q' "$CONDA_ENV") python scripts/validate_accuracy.py policy.ckpt_name=$(printf '%q' "$CKPT_NAME") env_runner.num_episodes=$(printf '%q' "$NUM_EPISODES")"
+
+if command -v script >/dev/null 2>&1 && script -V 2>&1 | grep -q util-linux; then
+    # typescript в /dev/null — нужен только stdout в tee
+    script -qec "$VAL_CMD" /dev/null 2>&1 | tee "$OUTPUT_FILE"
+else
+    echo "[run_validate_accuracy] WARNING: util-linux \`script\` not found; tqdm may not show a bar (output still goes to file)."
+    eval "$VAL_CMD" 2>&1 | stdbuf -oL -eL tee "$OUTPUT_FILE"
+fi
 
 echo "---"
 echo "Results saved to: $OUTPUT_FILE"

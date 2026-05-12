@@ -1,6 +1,7 @@
 from __future__ import annotations
 import functools
 import logging
+import os
 import sys
 import hydra
 import torch
@@ -331,6 +332,14 @@ class FMPolicy(ComposerModel, BasePolicy):
         robot_state[..., 9] += torch.tensor(0.5, device=DEVICE)
         return robot_state
 
+    @staticmethod
+    def _denorm_gripper(gripper_norm: torch.Tensor) -> torch.Tensor:
+        """
+        Undo _norm_robot_state gripper shift (raw open≈1, closed≈0 → norm subtracts 0.5).
+        Phase heuristics in phase_utils use raw [0,1] scale and gripper_close_threshold.
+        """
+        return gripper_norm + 0.5
+
     def _norm_data(self, batch: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
         # batch may be (pcd, robot_state_obs, robot_state_pred) or (..., phase_pred)
         pcd, robot_state_obs, robot_state_pred = batch[:3]
@@ -555,20 +564,25 @@ class FMPolicy(ComposerModel, BasePolicy):
         z = self._init_noise(B) if noise is None else noise
         traj = [z]
         phase_seq = None
+        g_last_norm: torch.Tensor | None = None
+        g_last_raw: torch.Tensor | None = None
         if self.phase_enabled:
             # If phase not provided, use heuristic over horizon based on current gripper state.
             if phase is None:
+                # robot_state_obs is normalized before infer_y (see infer_from_np / _norm_robot_state).
+                # Phase thresholds are defined in raw gripper scale, so convert back.
                 # robot_state_obs: (B, n_obs, 10)
-                g_last = robot_state_obs[:, -1, 9]
+                g_last_norm = robot_state_obs[:, -1, 9]
+                g_last_raw = self._denorm_gripper(g_last_norm)
                 ph, _ = compute_phase_labels_torch_from_gripper(
-                    g_last.view(B, 1).repeat(1, self.n_pred_steps),
+                    g_last_raw.view(B, 1).repeat(1, self.n_pred_steps),
                     thr=self.phase_cfg.gripper_close_threshold,
                     contact_window=self.phase_cfg.contact_window,
                     num_phases=self.phase_cfg.num_phases,
                 )
                 # If gripper is open, we want phase 0 early, then contact window, then phase 2.
                 # Approximate grasp time at middle of horizon.
-                open_mask = (g_last >= self.phase_cfg.gripper_close_threshold).view(B, 1)
+                open_mask = (g_last_raw >= self.phase_cfg.gripper_close_threshold).view(B, 1)
                 if bool(open_mask.any()):
                     T = self.n_pred_steps
                     t_grasp = max(0, min(T - 1, int(0.5 * T)))
@@ -588,6 +602,50 @@ class FMPolicy(ComposerModel, BasePolicy):
                     phase_seq = phase
             if phase_seq.shape != (B, self.n_pred_steps):
                 raise ValueError(f"phase must broadcast to (B,T)={(B,self.n_pred_steps)}, got {tuple(phase_seq.shape)}")
+            assert phase_seq.dtype == torch.int64
+            assert torch.all((phase_seq >= 0) & (phase_seq < self.phase_cfg.num_phases))
+
+            thr = float(self.phase_cfg.gripper_close_threshold)
+            if g_last_raw is not None and os.environ.get("PFP_PHASE_INFER_DEBUG", "").lower() in ("1", "true", "yes"):
+                flat = phase_seq.reshape(-1)
+                counts = {int(p): int((flat == p).sum().item()) for p in range(self.phase_cfg.num_phases)}
+                logger.info(
+                    "[phase-infer] g_norm min/max/mean=%.4f/%.4f/%.4f  g_raw min/max/mean=%.4f/%.4f/%.4f  thr=%.4f  counts=%s",
+                    float(g_last_norm.min()),
+                    float(g_last_norm.max()),
+                    float(g_last_norm.float().mean()),
+                    float(g_last_raw.min()),
+                    float(g_last_raw.max()),
+                    float(g_last_raw.float().mean()),
+                    thr,
+                    counts,
+                )
+            elif g_last_raw is not None and logger.isEnabledFor(logging.DEBUG):
+                flat = phase_seq.reshape(-1)
+                counts = {int(p): int((flat == p).sum().item()) for p in range(self.phase_cfg.num_phases)}
+                logger.debug(
+                    "[phase-infer] g_norm min/max/mean=%.4f/%.4f/%.4f  g_raw min/max/mean=%.4f/%.4f/%.4f  thr=%.4f  counts=%s",
+                    float(g_last_norm.min()),
+                    float(g_last_norm.max()),
+                    float(g_last_norm.float().mean()),
+                    float(g_last_raw.min()),
+                    float(g_last_raw.max()),
+                    float(g_last_raw.float().mean()),
+                    thr,
+                    counts,
+                )
+
+            if g_last_raw is not None:
+                open_b = g_last_raw >= thr
+                bad_first = open_b & (phase_seq[:, 0] == 2)
+                if bool(bad_first.any()):
+                    logger.warning(
+                        "[phase-infer] Open gripper (raw >= %.3f) but phase_seq[:,0]==2 for %d/%d batch rows — "
+                        "check phase heuristic / normalization.",
+                        thr,
+                        int(bad_first.sum().item()),
+                        int(B),
+                    )
         D = int(self.y_dim)
         E = int(self.phase_cfg.phase_embed_dim) if self.phase_enabled else 0
         t0, dt = get_timesteps(self.flow_schedule, self.num_k_infer, exp_scale=self.exp_scale)
