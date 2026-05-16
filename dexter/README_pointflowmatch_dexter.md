@@ -129,6 +129,7 @@ bash dexter/download_open_fridge_two_phase.sh --stable3
 | Задача | Куда ложится zarr | Отдельный `valid` |
 |--------|-------------------|---------------------|
 | `run_pointflowmatch_open_fridge*.sbatch` | `demos/sim/open_fridge/train`, `valid` | нужен |
+| `run_pointflowmatch_open_fridge_phase_prediction.sbatch` | то же; **FMPolicy + phase_head** (`phase_prediction=enabled`) | нужен |
 | `two_layers_planning/sbatch/train_open_fridge_*_grasp.sbatch` | `train_pre_grasp`, `train_post_grasp` | не нужен (`use_validation: false`) |
 
 Ссылки на публичные шары (те же, что вшиты в скрипты): [полный сим-набор](https://disk.yandex.ru/d/Ssr_BffZItISOg), [pre](https://disk.yandex.ru/d/E81_4UbQiwAYpw), [post](https://disk.yandex.ru/d/OmzMhzSy0lGTMw).
@@ -169,6 +170,35 @@ sbatch dexter/run_pointflowmatch_open_fridge_phase_conditioned.sbatch
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
 sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted_phase_conditioned.sbatch
+```
+
+**Learned phase prediction (одна модель FMPolicy + `phase_head`, как в `pfp/policy/fm_policy.py`):**
+
+Обучает `scripts/train.py` с `model=flow` (`FMPolicy`), `phase_conditioning=enabled`, `phase_prediction=enabled`. На инференсе фаза предсказывается из наблюдения; flow матчится с RLBench (текущая фаза на весь горизонт).
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+conda activate ./pfp-train-env
+
+# Проверка конфига без GPU и без датасета
+python dexter/verify_training_setup.py \
+  --overrides task_name=open_fridge +experiment=pointflowmatch \
+  phase_conditioning=enabled phase_prediction=enabled
+
+sbatch dexter/run_pointflowmatch_open_fridge_phase_prediction.sbatch
+```
+
+Вариант с gripper-weighted loss:
+
+```bash
+sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted_phase_prediction.sbatch
+```
+
+Локально (без Slurm), из корня репо:
+
+```bash
+python dexter/train_pointflowmatch_open_fridge.py \
+  --phase-conditioning enabled --phase-prediction enabled
 ```
 
 **Двухфазное обучение (pre, затем post)** — из корня репозитория, окружение `pfp-train-env` уже используется внутри `.sbatch` (как в `run_pointflowmatch_open_fridge.sbatch`):
@@ -344,4 +374,17 @@ python scripts/validate_accuracy.py policy.ckpt_name=<run_name> env_runner.num_e
   ```
 
 Базовое обучение (`+experiment=pointflowmatch`) остаётся без временных весов (все шаги равны), а gripper-weighted эксперимент — это отдельный запуск, чекпоинты которого ложатся в свою папку `ckpt/<run_name>/`.
+
+#### 9. Соответствие моделей и sbatch (шпаргалка)
+
+| Цель | Slurm / команда | Hydra |
+|------|-----------------|-------|
+| Baseline PointFlowMatch | `run_pointflowmatch_open_fridge.sbatch` | `+experiment=pointflowmatch`, phase off |
+| Oracle phase (GT в датасете) | `run_pointflowmatch_open_fridge_phase_conditioned.sbatch` | `phase_conditioning=enabled`, `phase_prediction=disabled` |
+| **Learned phase (эта модель)** | `run_pointflowmatch_open_fridge_phase_prediction.sbatch` | `phase_conditioning=enabled`, `phase_prediction=enabled` |
+| Learned phase + gripper weights | `run_pointflowmatch_open_fridge_gripper_weighted_phase_prediction.sbatch` | `+experiment=pointflowmatch_gripper_weighted` + phase flags |
+
+Все варианты в первой колонке используют **`conf/model/flow.yaml`** → **`pfp.policy.fm_policy.FMPolicy`**, не двухфазные отдельные политики.
+
+Перед длинным job скрипт `dexter/verify_training_setup.py` проверяет, что Hydra собирает именно `FMPolicy` и что `phase_head` создаётся при `phase_prediction=enabled`.
 

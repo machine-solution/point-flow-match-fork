@@ -255,6 +255,8 @@ In the `dexter/` folder you can find helper files for running PointFlowMatch tra
 - `dexter/instruction.md` – short Russian introduction to Slurm on Dexter (queues, `sbatch`, how to read `.out/.err` logs).
 - `dexter/pfp_train_env.yml` – Conda environment for offline training (no CoppeliaSim / RLBench required).
 - `dexter/run_pointflowmatch_open_fridge.sbatch` – example Slurm script for training the PointFlowMatch baseline on the `open_fridge` task using existing demos.
+- `dexter/run_pointflowmatch_open_fridge_phase_prediction.sbatch` – Slurm training for **FMPolicy + learned phase head** (`phase_conditioning=enabled`, `phase_prediction=enabled`).
+- `dexter/verify_training_setup.py` – quick check that Hydra instantiates `FMPolicy` with the intended phase settings (no GPU/dataset).
 - `dexter/download_dataset.sh` / `dexter/download_open_fridge_two_phase.sh` – download baseline or two-phase zarr from Yandex Disk (run from repo root).
 - `dexter/run_open_fridge_pre_grasp.sbatch`, `dexter/run_open_fridge_post_grasp.sbatch`, `dexter/run_open_fridge_two_phase_chain.sbatch` – Slurm training for two-phase `open_fridge` on Dexter (conda `pfp-train-env`).
 - `two_layers_planning/README.md` – two-phase workflow, split script, and **local** `.venv` sbatch under `two_layers_planning/sbatch/`.
