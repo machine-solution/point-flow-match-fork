@@ -3,6 +3,8 @@ import functools
 import logging
 import os
 import sys
+from pathlib import Path
+
 import hydra
 import torch
 import torch.nn as nn
@@ -16,8 +18,12 @@ from pfp.common.fm_utils import get_timesteps
 from pfp.data.dataset_pcd import augment_pcd_data
 from pfp.common.phase_utils import (
     PhaseConditioningConfig,
+    PhasePredictionConfig,
+    PhaseRolloutConfig,
     compute_phase_labels_torch_from_gripper,
     phase_cfg_from,
+    phase_prediction_cfg_from,
+    phase_rollout_cfg_from,
 )
 
 logger = logging.getLogger(__name__)
@@ -142,6 +148,7 @@ def log_state_dict_load(
     strict: bool = False,
     tag: str = "load",
     phase_enabled: bool | None = None,
+    phase_prediction_enabled: bool | None = None,
 ) -> tuple[list[str], list[str]]:
     """load_state_dict(strict=False) with stderr diagnostics for silent-compat loads."""
     _warn_checkpoint_shape_mismatches(module, state_dict, tag=tag)
@@ -184,6 +191,20 @@ def log_state_dict_load(
                 f"with mismatched UNet channel widths; verify training/inference use compatible checkpoints.",
                 file=sys.stderr,
             )
+        miss_phase_head = any(k.startswith("phase_head.") for k in missing)
+        unexp_phase_head = any(k.startswith("phase_head.") for k in unexpected)
+        if phase_prediction_enabled and miss_phase_head:
+            print(
+                f"[checkpoint:{tag}] WARNING: phase_prediction enabled but checkpoint has no phase_head "
+                f"weights — head stays randomly initialized.",
+                file=sys.stderr,
+            )
+        if phase_prediction_enabled is False and unexp_phase_head:
+            print(
+                f"[checkpoint:{tag}] WARNING: checkpoint contains phase_head weights but "
+                f"phase_prediction is disabled; unexpected phase_head keys ignored.",
+                file=sys.stderr,
+            )
 
     return missing, unexpected
 
@@ -214,6 +235,8 @@ class FMPolicy(ComposerModel, BasePolicy):
         snr_sampler: str = "uniform",
         subs_factor: int = 1,
         phase_conditioning: dict | None = None,
+        phase_prediction: dict | None = None,
+        phase_rollout: dict | None = None,
     ) -> None:
         ComposerModel.__init__(self)
         BasePolicy.__init__(self, n_obs_steps, subs_factor)
@@ -240,10 +263,39 @@ class FMPolicy(ComposerModel, BasePolicy):
         self.snr_sampler = snr_sampler
         self.phase_cfg: PhaseConditioningConfig = phase_cfg_from(phase_conditioning)
         self.phase_enabled = bool(self.phase_cfg.enabled)
+        self._phase_pred_cfg: PhasePredictionConfig = phase_prediction_cfg_from(phase_prediction)
+        self.phase_pred_enabled = bool(self._phase_pred_cfg.enabled) and self.phase_enabled
+        self._phase_rollout_cfg: PhaseRolloutConfig = phase_rollout_cfg_from(phase_rollout)
+        self._last_infer_phase_log: dict | None = None
+        # Rollout-only state (env steps), used when phase_rollout.enabled and infer_y has phase=None
+        self._rollout_phase_state: int = 0
+        self._rollout_step_counter: int = 0
+        self._rollout_log_lines: list[str] = []
+        self._rollout_timeline_episode_idx: int = 0
+        self._rollout_reset_once: bool = False
         if self.phase_enabled:
             self.phase_embedding = nn.Embedding(self.phase_cfg.num_phases, self.phase_cfg.phase_embed_dim)
         else:
             self.phase_embedding = None
+        if self._phase_pred_cfg.enabled and not self.phase_enabled:
+            logger.warning(
+                "phase_prediction.enabled=true but phase_conditioning.enabled=false — phase head disabled."
+            )
+        global_cond_dim = int(self.x_dim) * int(self.n_obs_steps)
+        if self.phase_pred_enabled:
+            hd = int(self._phase_pred_cfg.hidden_dim)
+            np_ = int(self.phase_cfg.num_phases)
+            self.phase_head = nn.Sequential(
+                nn.Linear(global_cond_dim, hd),
+                nn.ReLU(),
+                nn.Linear(hd, np_),
+            )
+        else:
+            self.phase_head = None
+        if self._phase_rollout_cfg.enabled and not self.phase_enabled:
+            logger.warning(
+                "phase_rollout.enabled=true but phase_conditioning.enabled=false — rollout phase scheduler ignored."
+            )
         effective_input_dim = int(y_dim)
         if self.phase_enabled:
             effective_input_dim += int(self.phase_cfg.phase_embed_dim)
@@ -270,7 +322,8 @@ class FMPolicy(ComposerModel, BasePolicy):
 
         print(
             f"[FMPolicy] diffusion_net: {ctor_src}\n"
-            f"  phase_conditioning.enabled={self.phase_enabled}  y_dim={y_dim}  "
+            f"  phase_conditioning.enabled={self.phase_enabled}  "
+            f"phase_prediction.enabled={self.phase_pred_enabled}  y_dim={y_dim}  "
             f"phase_embed_dim={int(self.phase_cfg.phase_embed_dim) if self.phase_enabled else 0}\n"
             f"  UNet full field width (in/out)={effective_input_dim}  "
             f"action velocity uses first {int(y_dim)} channels only",
@@ -315,6 +368,151 @@ class FMPolicy(ComposerModel, BasePolicy):
         self.flow_schedule = flow_schedule
         self.exp_scale = exp_scale
         return
+
+    def encode_obs(self, pcd: torch.Tensor, robot_state_obs: torch.Tensor) -> torch.Tensor:
+        """Global conditioning features for flow UNet and phase head (single encoder pass)."""
+        return self.obs_encoder(pcd, robot_state_obs)
+
+    def predict_phase_logits(self, global_cond: torch.Tensor) -> torch.Tensor:
+        if not self.phase_pred_enabled or self.phase_head is None:
+            raise RuntimeError("phase_prediction is not enabled on this model")
+        return self.phase_head(global_cond)
+
+    @staticmethod
+    def _phase_class_counts(labels: torch.Tensor, num_phases: int) -> dict[int, int]:
+        flat = labels.reshape(-1).to(torch.int64)
+        return {int(p): int((flat == p).sum().item()) for p in range(int(num_phases))}
+
+    def _phase_for_flow(
+        self,
+        phase_gt: torch.Tensor,
+        global_cond: torch.Tensor,
+        *,
+        B: int,
+        T: int,
+    ) -> torch.Tensor:
+        """Phase tensor (B,T) for CFM conditioning: GT horizon by default; optional predicted."""
+        if phase_gt.dtype != torch.int64:
+            phase_gt = phase_gt.to(torch.int64)
+        if self.phase_pred_enabled and self._phase_pred_cfg.use_predicted_phase_for_flow_train:
+            logits = self.predict_phase_logits(global_cond)
+            p = logits.argmax(dim=-1)
+            if self._phase_pred_cfg.detach_predicted_phase:
+                p = p.detach()
+            return p.view(B, 1).expand(B, T)
+        return phase_gt
+
+    def _compute_phase_aux_loss(
+        self, global_cond: torch.Tensor, phase_gt: torch.Tensor
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        logits = self.predict_phase_logits(global_cond)
+        target = phase_gt[:, 0].to(torch.int64)
+        phase_loss = nn.functional.cross_entropy(logits, target)
+        pred = logits.argmax(dim=-1)
+        acc = (pred == target).float().mean()
+        metrics = {
+            "loss/train/phase": phase_loss.item(),
+            "metrics/train/phase_accuracy": acc.item(),
+        }
+        for prefix, lab in [("gt", target), ("pred", pred)]:
+            for p, c in self._phase_class_counts(lab, self.phase_cfg.num_phases).items():
+                metrics[f"metrics/train/phase_dist_{prefix}_{p}"] = float(c) / max(int(target.numel()), 1)
+        return phase_loss, metrics
+
+    def _rollout_timeline_dir(self) -> Path:
+        td = self._phase_rollout_cfg.timeline_dir
+        if td:
+            return Path(td).expanduser().resolve()
+        return (REPO_DIRS.ROOT / "recordings" / "phase_rollout").resolve()
+
+    def _flush_rollout_phase_timeline(self) -> None:
+        if not self._rollout_log_lines:
+            return
+        out_dir = self._rollout_timeline_dir()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"ep_{self._rollout_timeline_episode_idx:04d}_phases.txt"
+        out_path.write_text("".join(self._rollout_log_lines), encoding="utf-8")
+        logger.info("[phase-rollout] wrote timeline %s (%d lines)", out_path, len(self._rollout_log_lines))
+        self._rollout_log_lines.clear()
+        self._rollout_timeline_episode_idx += 1
+
+    def reset_obs(self):
+        """Episode boundary: reset rollout phase machine and (optional) flush timeline."""
+        if self.phase_enabled and self._phase_rollout_cfg.enabled and self._rollout_reset_once and self._rollout_log_lines:
+            self._flush_rollout_phase_timeline()
+        self._rollout_phase_state = 0
+        self._rollout_step_counter = 0
+        self._rollout_reset_once = True
+        if self.phase_enabled and self._phase_rollout_cfg.enabled:
+            logger.info("[phase-rollout] reset phase state")
+        super().reset_obs()
+
+    def predict_action(self, obs: np.ndarray, robot_state: np.ndarray):
+        self.update_obs_lists(obs, robot_state)
+        obs_stacked, robot_state_stacked = self.sample_stacked_obs()
+        action = self.infer_from_np(obs_stacked, robot_state_stacked)
+        if self.phase_pred_enabled and self._phase_pred_cfg.debug_log and self._last_infer_phase_log:
+            lg = self._last_infer_phase_log
+            try:
+                g_obs = float(robot_state[9])
+            except Exception:
+                g_obs = float("nan")
+            try:
+                g_act = float(action[-1, 0, 9])
+            except Exception:
+                g_act = float("nan")
+            logger.info(
+                "[phase-pred] step=%s phase=%s probs=%s gripper_obs=%.4f action_gripper=%.4f",
+                lg.get("env_step"),
+                lg.get("phase"),
+                lg.get("probs"),
+                g_obs,
+                g_act,
+            )
+        if self.phase_enabled and self._phase_rollout_cfg.enabled:
+            self._rollout_after_predict(robot_state, action)
+        return action
+
+    def _rollout_after_predict(self, robot_state, action) -> None:
+        """After one env-step prediction: log, append timeline, increment counter, transition phases."""
+        try:
+            g_obs = float(robot_state[9])
+        except Exception:
+            g_obs = float("nan")
+        try:
+            g_act = float(action[-1, 0, 9])
+        except Exception:
+            g_act = float("nan")
+
+        fp = int(self._phase_rollout_cfg.force_phase)
+        if fp >= 0:
+            nm = int(self.phase_cfg.num_phases) - 1
+            self._rollout_phase_state = int(min(max(fp, 0), nm))
+
+        self._rollout_step_counter += 1
+        thr = float(self.phase_cfg.gripper_close_threshold)
+
+        if fp < 0:
+            if self._rollout_phase_state == 0 and self._rollout_step_counter >= int(self._phase_rollout_cfg.switch_step_1):
+                self._rollout_phase_state = 1
+            elif self._rollout_phase_state == 1:
+                if (g_act < thr) or (self._rollout_step_counter >= int(self._phase_rollout_cfg.switch_step_2)):
+                    self._rollout_phase_state = 2
+
+        completed = self._rollout_step_counter - 1
+        line = f"step {completed} -> phase {int(self._rollout_phase_state)}  gripper_obs={g_obs:.4f}  action_gripper={g_act:.4f}\n"
+        self._rollout_log_lines.append(line)
+
+        if self._phase_rollout_cfg.verbose:
+            logger.info(
+                "[phase-rollout] env_step=%d phase=%d gripper_obs=%.4f action_gripper=%.4f counter=%d fp=%d",
+                completed,
+                int(self._rollout_phase_state),
+                g_obs,
+                g_act,
+                int(self._rollout_step_counter),
+                fp,
+            )
 
     def _norm_obs(self, pcd: torch.Tensor) -> torch.Tensor:
         # I only do centering here, no scaling, to keep the relative distances and interpretability
@@ -447,21 +645,28 @@ class FMPolicy(ComposerModel, BasePolicy):
                 "phase_conditioning.enabled=true, but dataset batch has no phase tensor. "
                 "Pass phase_conditioning to dataset and ensure it returns phase_pred."
             )
-        loss_xyz, loss_rot6d, loss_grip = self.calculate_loss(
+        loss_xyz, loss_rot6d, loss_grip, phase_loss, phase_metrics = self.calculate_loss(
             pcd, robot_state_obs, robot_state_pred, phase=phase_pred
         )
-        loss = (
+        cfm_loss = (
             self.l_w["xyz"] * loss_xyz
             + self.l_w["rot6d"] * loss_rot6d
             + self.l_w["grip"] * loss_grip
         )
-        self.logger.log_metrics(
-            {
-                "loss/train/xyz": loss_xyz.item(),
-                "loss/train/rot6d": loss_rot6d.item(),
-                "loss/train/grip": loss_grip.item(),
-            }
-        )
+        metrics = {
+            "loss/train/xyz": loss_xyz.item(),
+            "loss/train/rot6d": loss_rot6d.item(),
+            "loss/train/grip": loss_grip.item(),
+            "loss/train/cfm": cfm_loss.item(),
+        }
+        if phase_loss is not None:
+            metrics.update(phase_metrics)
+            loss = cfm_loss + float(self._phase_pred_cfg.loss_weight) * phase_loss
+            metrics["loss/train/total"] = loss.item()
+        else:
+            loss = cfm_loss
+            metrics["loss/train/total"] = loss.item()
+        self.logger.log_metrics(metrics)
         return loss
 
     def calculate_loss(
@@ -472,15 +677,13 @@ class FMPolicy(ComposerModel, BasePolicy):
         *,
         phase: torch.Tensor | None = None,
     ):
-        nx: torch.Tensor = self.obs_encoder(pcd, robot_state_obs)
+        nx = self.encode_obs(pcd, robot_state_obs)
         ny: torch.Tensor = robot_state_pred
         B, T, _ = ny.shape
-        t = self._sample_snr(B)
-        z0 = self._init_noise(ny.shape[0])
-        z1 = ny
-        z_flow = t * z1 + (1.0 - t) * z0
-        D = int(self.y_dim)
-        assert z_flow.shape[-1] == D
+        phase_loss = None
+        phase_metrics: dict[str, float] = {}
+        phase_flow = None
+
         if self.phase_enabled:
             if phase is None:
                 raise ValueError("phase_conditioning.enabled=true requires phase labels in calculate_loss().")
@@ -490,8 +693,19 @@ class FMPolicy(ComposerModel, BasePolicy):
                 raise ValueError(f"phase must be (B,T)={B,T}, got {tuple(phase.shape)}")
             if torch.any((phase < 0) | (phase >= self.phase_cfg.num_phases)):
                 raise ValueError("phase has values outside [0, num_phases-1].")
-            phase_emb = self.phase_embedding(phase)  # (B,T,E)
-            z_t = torch.cat([z_flow, phase_emb], dim=-1)  # (B,T,D+E)
+            if self.phase_pred_enabled:
+                phase_loss, phase_metrics = self._compute_phase_aux_loss(nx, phase)
+            phase_flow = self._phase_for_flow(phase, nx, B=B, T=T)
+
+        t = self._sample_snr(B)
+        z0 = self._init_noise(ny.shape[0])
+        z1 = ny
+        z_flow = t * z1 + (1.0 - t) * z0
+        D = int(self.y_dim)
+        assert z_flow.shape[-1] == D
+        if self.phase_enabled:
+            phase_emb = self.phase_embedding(phase_flow)
+            z_t = torch.cat([z_flow, phase_emb], dim=-1)
             assert z_t.shape[-1] == D + int(self.phase_cfg.phase_embed_dim)
         else:
             z_t = z_flow
@@ -505,7 +719,7 @@ class FMPolicy(ComposerModel, BasePolicy):
         loss_xyz = (per_xyz * weights).mean()
         loss_rot6d = (per_rot6d * weights).mean()
         loss_grip = (per_grip * weights).mean()
-        return loss_xyz, loss_rot6d, loss_grip
+        return loss_xyz, loss_rot6d, loss_grip, phase_loss, phase_metrics
 
     # ############### Inference ################
 
@@ -518,27 +732,33 @@ class FMPolicy(ComposerModel, BasePolicy):
         pcd, robot_state_obs, robot_state_pred = batch[:3]
         phase_pred = batch[3] if (self.phase_enabled and len(batch) >= 4) else None
 
-        # Eval loss
-        loss_xyz, loss_rot6d, loss_grip = self.calculate_loss(
+        # Eval loss (oracle phase for flow; phase head CE when enabled)
+        loss_xyz, loss_rot6d, loss_grip, phase_loss, phase_metrics = self.calculate_loss(
             pcd, robot_state_obs, robot_state_pred, phase=phase_pred
         )
-        loss_total = (
+        cfm_loss = (
             self.l_w["xyz"] * loss_xyz
             + self.l_w["rot6d"] * loss_rot6d
             + self.l_w["grip"] * loss_grip
         )
-        self.logger.log_metrics(
-            {
-                "loss/eval/xyz": loss_xyz.item(),
-                "loss/eval/rot6d": loss_rot6d.item(),
-                "loss/eval/grip": loss_grip.item(),
-                "loss/eval/total": loss_total.item(),
-            }
-        )
+        eval_metrics = {
+            "loss/eval/xyz": loss_xyz.item(),
+            "loss/eval/rot6d": loss_rot6d.item(),
+            "loss/eval/grip": loss_grip.item(),
+            "loss/eval/cfm": cfm_loss.item(),
+        }
+        if phase_loss is not None:
+            eval_metrics.update({k.replace("/train/", "/eval/"): v for k, v in phase_metrics.items()})
+            eval_metrics["loss/eval/phase"] = phase_loss.item()
+            loss_total = cfm_loss + float(self._phase_pred_cfg.loss_weight) * phase_loss
+        else:
+            loss_total = cfm_loss
+        eval_metrics["loss/eval/total"] = loss_total.item()
+        self.logger.log_metrics(eval_metrics)
 
-        # Eval metrics
-        # Offline eval: if phase labels exist in the dataset, use them consistently.
-        pred_y = self.infer_y(pcd, robot_state_obs, phase=phase_pred)
+        # Inference: use learned phase when enabled (matches RLBench rollout); else dataset oracle.
+        infer_phase = None if self.phase_pred_enabled else phase_pred
+        pred_y = self.infer_y(pcd, robot_state_obs, phase=infer_phase)
         mse_xyz = nn.functional.mse_loss(pred_y[..., :3], robot_state_pred[..., :3])
         mse_rot6d = nn.functional.mse_loss(pred_y[..., 3:9], robot_state_pred[..., 3:9])
         mse_grip = nn.functional.mse_loss(pred_y[..., 9], robot_state_pred[..., 9])
@@ -559,7 +779,7 @@ class FMPolicy(ComposerModel, BasePolicy):
         noise=None,
         return_traj=False,
     ) -> torch.Tensor:
-        nx: torch.Tensor = self.obs_encoder(pcd, robot_state_obs)
+        nx = self.encode_obs(pcd, robot_state_obs)
         B = nx.shape[0]
         z = self._init_noise(B) if noise is None else noise
         traj = [z]
@@ -567,32 +787,59 @@ class FMPolicy(ComposerModel, BasePolicy):
         g_last_norm: torch.Tensor | None = None
         g_last_raw: torch.Tensor | None = None
         if self.phase_enabled:
-            # If phase not provided, use heuristic over horizon based on current gripper state.
             if phase is None:
-                # robot_state_obs is normalized before infer_y (see infer_from_np / _norm_robot_state).
-                # Phase thresholds are defined in raw gripper scale, so convert back.
-                # robot_state_obs: (B, n_obs, 10)
                 g_last_norm = robot_state_obs[:, -1, 9]
                 g_last_raw = self._denorm_gripper(g_last_norm)
-                ph, _ = compute_phase_labels_torch_from_gripper(
-                    g_last_raw.view(B, 1).repeat(1, self.n_pred_steps),
-                    thr=self.phase_cfg.gripper_close_threshold,
-                    contact_window=self.phase_cfg.contact_window,
-                    num_phases=self.phase_cfg.num_phases,
-                )
-                # If gripper is open, we want phase 0 early, then contact window, then phase 2.
-                # Approximate grasp time at middle of horizon.
-                open_mask = (g_last_raw >= self.phase_cfg.gripper_close_threshold).view(B, 1)
-                if bool(open_mask.any()):
-                    T = self.n_pred_steps
-                    t_grasp = max(0, min(T - 1, int(0.5 * T)))
-                    w = max(0, int(self.phase_cfg.contact_window))
-                    tt = torch.arange(T, device=DEVICE).view(1, T)
-                    base = torch.where(tt <= (t_grasp + w), torch.zeros_like(tt), torch.full_like(tt, 2))
-                    win = (tt >= (t_grasp - w)) & (tt <= (t_grasp + w))
-                    base = torch.where(win, torch.ones_like(base), base).to(torch.int64)
-                    ph = torch.where(open_mask, base.expand(B, T), ph)
-                phase_seq = ph
+
+                if self.phase_pred_enabled:
+                    phase_logits = self.predict_phase_logits(nx)
+                    phase_current = phase_logits.argmax(dim=-1)
+                    phase_seq = phase_current.view(B, 1).expand(B, self.n_pred_steps)
+                    probs = torch.softmax(phase_logits, dim=-1)
+                    self._last_infer_phase_log = {
+                        "phase": int(phase_current[0].item()) if B == 1 else phase_current.tolist(),
+                        "probs": [round(float(x), 3) for x in probs[0].tolist()],
+                        "env_step": int(self._rollout_step_counter),
+                    }
+                    if self._phase_pred_cfg.debug_log:
+                        logger.info(
+                            "[phase-pred/infer] phase=%s probs=%s",
+                            self._last_infer_phase_log["phase"],
+                            self._last_infer_phase_log["probs"],
+                        )
+                elif self._phase_rollout_cfg.enabled and self._phase_rollout_cfg.force_phase >= 0:
+                    p = int(min(max(self._phase_rollout_cfg.force_phase, 0), self.phase_cfg.num_phases - 1))
+                    phase_seq = torch.full((B, self.n_pred_steps), p, device=DEVICE, dtype=torch.int64)
+                elif self._phase_rollout_cfg.enabled:
+                    # Stateful rollout: same discrete phase for every horizon slot (diagnostic).
+                    p = int(min(max(self._rollout_phase_state, 0), self.phase_cfg.num_phases - 1))
+                    phase_seq = torch.full((B, self.n_pred_steps), p, device=DEVICE, dtype=torch.int64)
+                    if self._phase_rollout_cfg.verbose:
+                        logger.info(
+                            "[phase-rollout/infer] flat_phase=%d env_step_counter=%d (before this infer's post bump)",
+                            p,
+                            int(self._rollout_step_counter),
+                        )
+                else:
+                    # Horizon-time heuristic (legacy): phase varies along T; can mismatch env execution
+                    # when only prediction[...,0] is applied each step.
+                    ph, _ = compute_phase_labels_torch_from_gripper(
+                        g_last_raw.view(B, 1).repeat(1, self.n_pred_steps),
+                        thr=self.phase_cfg.gripper_close_threshold,
+                        contact_window=self.phase_cfg.contact_window,
+                        num_phases=self.phase_cfg.num_phases,
+                    )
+                    open_mask = (g_last_raw >= self.phase_cfg.gripper_close_threshold).view(B, 1)
+                    if bool(open_mask.any()):
+                        T = self.n_pred_steps
+                        t_grasp = max(0, min(T - 1, int(0.5 * T)))
+                        w = max(0, int(self.phase_cfg.contact_window))
+                        tt = torch.arange(T, device=DEVICE).view(1, T)
+                        base = torch.where(tt <= (t_grasp + w), torch.zeros_like(tt), torch.full_like(tt, 2))
+                        win = (tt >= (t_grasp - w)) & (tt <= (t_grasp + w))
+                        base = torch.where(win, torch.ones_like(base), base).to(torch.int64)
+                        ph = torch.where(open_mask, base.expand(B, T), ph)
+                    phase_seq = ph
             else:
                 if phase.dtype != torch.int64:
                     phase = phase.to(torch.int64)
@@ -678,6 +925,9 @@ class FMPolicy(ComposerModel, BasePolicy):
         flow_schedule: str = None,
         exp_scale: float = None,
         subs_factor: int = 1,
+        phase_conditioning=None,
+        phase_prediction=None,
+        phase_rollout=None,
     ):
         ckpt_dir = REPO_DIRS.CKPT / ckpt_name
         ckpt_path_list = list(ckpt_dir.glob(f"{ckpt_episode}*"))
@@ -696,14 +946,19 @@ class FMPolicy(ComposerModel, BasePolicy):
         # cfg.model.obs_encoder.encoder.random_crop = False
         cfg.model.subs_factor = subs_factor
         assert cfg.model._target_.split(".")[-1] == cls.__name__
-        pcfg = getattr(cfg, "phase_conditioning", None)
-        model: FMPolicy = hydra.utils.instantiate(cfg.model, phase_conditioning=pcfg)
+        pcfg = phase_conditioning if phase_conditioning is not None else getattr(cfg, "phase_conditioning", None)
+        ppred = phase_prediction if phase_prediction is not None else getattr(cfg, "phase_prediction", None)
+        prcfg = phase_rollout if phase_rollout is not None else getattr(cfg, "phase_rollout", None)
+        model: FMPolicy = hydra.utils.instantiate(
+            cfg.model, phase_conditioning=pcfg, phase_prediction=ppred, phase_rollout=prcfg
+        )
         log_state_dict_load(
             model,
             state_dict["state"]["model"],
             strict=False,
             tag=f"{ckpt_name}/{ckpt_episode}",
             phase_enabled=bool(getattr(pcfg, "enabled", False)) if pcfg is not None else False,
+            phase_prediction_enabled=bool(getattr(ppred, "enabled", False)) if ppred is not None else False,
         )
         model.to(DEVICE)
         # Ensure model is in float32 (model.to() should handle this, but ensure it)

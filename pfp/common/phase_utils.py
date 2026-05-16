@@ -16,6 +16,83 @@ class PhaseConditioningConfig:
     contact_window: int = 2
 
 
+@dataclass(frozen=True)
+class PhasePredictionConfig:
+    """Auxiliary phase classifier on global observation features (teacher-forced flow training)."""
+
+    enabled: bool = False
+    hidden_dim: int = 256
+    loss_weight: float = 0.1
+    use_predicted_phase_for_flow_train: bool = False
+    detach_predicted_phase: bool = True
+    debug_log: bool = False
+
+
+@dataclass(frozen=True)
+class PhaseRolloutConfig:
+    """Inference-only diagnostic: stateful phase over env steps (not horizon index)."""
+
+    enabled: bool = False
+    switch_step_1: int = 8
+    switch_step_2: int = 16
+    force_phase: int = -1  # -1 = use state machine; 0/1/2 = override
+    verbose: bool = False  # per-env-step logger.info; timeline file is always written when enabled
+    timeline_dir: str | None = None  # default: recordings/phase_rollout under repo root
+
+
+def phase_prediction_cfg_from(cfg: Any | None) -> PhasePredictionConfig:
+    if cfg is None:
+        return PhasePredictionConfig()
+    enabled = bool(getattr(cfg, "enabled", None) if hasattr(cfg, "enabled") else cfg.get("enabled", False))
+    hidden_dim = int(
+        getattr(cfg, "hidden_dim", None) if hasattr(cfg, "hidden_dim") else cfg.get("hidden_dim", 256)
+    )
+    lw = float(
+        getattr(cfg, "loss_weight", None) if hasattr(cfg, "loss_weight") else cfg.get("loss_weight", 0.1)
+    )
+    use_pred = bool(
+        getattr(cfg, "use_predicted_phase_for_flow_train", None)
+        if hasattr(cfg, "use_predicted_phase_for_flow_train")
+        else cfg.get("use_predicted_phase_for_flow_train", False)
+    )
+    detach = bool(
+        getattr(cfg, "detach_predicted_phase", None)
+        if hasattr(cfg, "detach_predicted_phase")
+        else cfg.get("detach_predicted_phase", True)
+    )
+    debug_log = bool(
+        getattr(cfg, "debug_log", None) if hasattr(cfg, "debug_log") else cfg.get("debug_log", False)
+    )
+    return PhasePredictionConfig(
+        enabled=enabled,
+        hidden_dim=hidden_dim,
+        loss_weight=lw,
+        use_predicted_phase_for_flow_train=use_pred,
+        detach_predicted_phase=detach,
+        debug_log=debug_log,
+    )
+
+
+def phase_rollout_cfg_from(cfg: Any | None) -> PhaseRolloutConfig:
+    if cfg is None:
+        return PhaseRolloutConfig()
+    enabled = bool(getattr(cfg, "enabled", None) if hasattr(cfg, "enabled") else cfg.get("enabled", False))
+    s1 = int(getattr(cfg, "switch_step_1", None) if hasattr(cfg, "switch_step_1") else cfg.get("switch_step_1", 8))
+    s2 = int(getattr(cfg, "switch_step_2", None) if hasattr(cfg, "switch_step_2") else cfg.get("switch_step_2", 16))
+    fp = int(getattr(cfg, "force_phase", None) if hasattr(cfg, "force_phase") else cfg.get("force_phase", -1))
+    verbose = bool(getattr(cfg, "verbose", None) if hasattr(cfg, "verbose") else cfg.get("verbose", False))
+    td = getattr(cfg, "timeline_dir", None) if hasattr(cfg, "timeline_dir") else cfg.get("timeline_dir", None)
+    timeline_dir = None if td in (None, "", "~", "null") else str(td)
+    return PhaseRolloutConfig(
+        enabled=enabled,
+        switch_step_1=s1,
+        switch_step_2=s2,
+        force_phase=fp,
+        verbose=verbose,
+        timeline_dir=timeline_dir,
+    )
+
+
 def phase_cfg_from(cfg: Any | None) -> PhaseConditioningConfig:
     """Best-effort conversion from OmegaConf/dict/None to a typed config."""
     if cfg is None:

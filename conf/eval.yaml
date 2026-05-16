@@ -22,3 +22,5 @@ policy:
 defaults:
   # NOTE: avoid YAML 1.1 booleans ("on/off") in defaults
   - phase_conditioning: disabled
+  - phase_prediction: disabled
+  - phase_rollout: disabled

@@ -41,3 +41,9 @@
 
   # Phase-conditioned single model (optional)
   phase_conditioning: ${phase_conditioning}
+
+  # Learned phase head p(phi | obs); inference uses predicted phase when phase=None
+  phase_prediction: ${phase_prediction}
+
+  # Inference-only rollout phase diagnostic (optional; does not affect training loss)
+  phase_rollout: ${phase_rollout}

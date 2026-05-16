@@ -1,0 +1,7 @@
+# @package phase_rollout
+enabled: true
+switch_step_1: 8
+switch_step_2: 16
+force_phase: -1
+verbose: false  # set true for per-step console logs (timeline .txt is always written)
+timeline_dir: null

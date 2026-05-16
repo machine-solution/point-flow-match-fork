@@ -1,0 +1,8 @@
+# @package phase_rollout
+# Inference-only diagnostic: stateful phase over RLBench env steps (see FMPolicy).
+enabled: false
+switch_step_1: 8
+switch_step_2: 16
+force_phase: -1
+verbose: false
+timeline_dir: null

@@ -60,6 +60,9 @@ def main(cfg: OmegaConf):
         flow_schedule=cfg.policy.get("flow_schedule", None),
         exp_scale=cfg.policy.get("exp_scale", None),
         subs_factor=cfg.policy.get("subs_factor", 1),
+        phase_conditioning=getattr(cfg, "phase_conditioning", None),
+        phase_prediction=getattr(cfg, "phase_prediction", None),
+        phase_rollout=getattr(cfg, "phase_rollout", None),
     )
     env_runner = RLBenchRunner(**cfg.env_runner)
     success_list, steps_list = env_runner.run(policy)

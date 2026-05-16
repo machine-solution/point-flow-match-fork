@@ -286,7 +286,12 @@ def main(cfg: OmegaConf):
     print("[memory] after dataloader_train" + (", dataloader_valid" if use_val else ""))
     _log_gpu_memory("after dataloaders")
 
-    composer_model: ComposerModel = hydra.utils.instantiate(cfg.model, phase_conditioning=getattr(cfg, "phase_conditioning", None))
+    composer_model: ComposerModel = hydra.utils.instantiate(
+        cfg.model,
+        phase_conditioning=getattr(cfg, "phase_conditioning", None),
+        phase_prediction=getattr(cfg, "phase_prediction", None),
+        phase_rollout=getattr(cfg, "phase_rollout", None),
+    )
     print("[memory] after composer_model = instantiate(cfg.model)")
     _log_gpu_memory("after model create")
 
@@ -303,13 +308,16 @@ def main(cfg: OmegaConf):
         state_dict = torch.load(ckpt_fpath, map_location=DEVICE, weights_only=False)
         # Same layout as in FMPolicy.load_from_checkpoint: state['state']['model']
         _pcfg = getattr(cfg, "phase_conditioning", None)
+        _ppred = getattr(cfg, "phase_prediction", None)
         _pe = bool(getattr(_pcfg, "enabled", False)) if _pcfg is not None else False
+        _ppe = bool(getattr(_ppred, "enabled", False)) if _ppred is not None else False
         log_state_dict_load(
             composer_model,
             state_dict["state"]["model"],
             strict=False,
             tag="resume",
             phase_enabled=_pe,
+            phase_prediction_enabled=_ppe,
         )
         print("[resume] Weights loaded into composer_model")
 

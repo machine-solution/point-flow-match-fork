@@ -55,7 +55,12 @@ def main() -> None:
             y_dim=y_dim, phase_enabled=enabled, phase_embed_dim=embed_d
         )
 
-        model = instantiate(cfg.model, phase_conditioning=pcfg)
+        model = instantiate(
+            cfg.model,
+            phase_conditioning=pcfg,
+            phase_prediction=getattr(cfg, "phase_prediction", None),
+            phase_rollout=getattr(cfg, "phase_rollout", None),
+        )
         model = model.float()
         assert isinstance(model.diffusion_net, nn.Module), "diffusion_net must be nn.Module"
         ctor = getattr(model, "_diffusion_net_ctor_source", "?")
@@ -119,12 +124,12 @@ def main() -> None:
             assert pred_vel.shape[-1] == y_dim
 
             if enabled:
-                loss_xyz, loss_rot6d, loss_grip = model.calculate_loss(
+                loss_xyz, loss_rot6d, loss_grip, _, _ = model.calculate_loss(
                     pcd, rs_obs, rs_pred, phase=phase
                 )
                 pred = model.infer_y(pcd, rs_obs, phase=phase)
             else:
-                loss_xyz, loss_rot6d, loss_grip = model.calculate_loss(
+                loss_xyz, loss_rot6d, loss_grip, _, _ = model.calculate_loss(
                     pcd, rs_obs, rs_pred, phase=None
                 )
                 pred = model.infer_y(pcd, rs_obs, phase=None)

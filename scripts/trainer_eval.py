@@ -42,7 +42,12 @@ def main(cfg: OmegaConf):
         **cfg.dataloader,
         persistent_workers=True if cfg.dataloader.num_workers > 0 else False,
     )
-    composer_model: ComposerModel = hydra.utils.instantiate(cfg.model)
+    composer_model: ComposerModel = hydra.utils.instantiate(
+        cfg.model,
+        phase_conditioning=getattr(cfg, "phase_conditioning", None),
+        phase_prediction=getattr(cfg, "phase_prediction", None),
+        phase_rollout=getattr(cfg, "phase_rollout", None),
+    )
     wandb_logger = WandBLogger(
         project="pfp-trainer-eval",
         entity="rl-lab-chisari",

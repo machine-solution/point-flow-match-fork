@@ -81,9 +81,9 @@ def main() -> None:
     with torch.no_grad():
         # forward shapes
         if phase is not None:
-            loss_xyz, loss_rot6d, loss_grip = model.calculate_loss(pcd, rs_obs, rs_pred, phase=phase)
+            loss_xyz, loss_rot6d, loss_grip, _, _ = model.calculate_loss(pcd, rs_obs, rs_pred, phase=phase)
         else:
-            loss_xyz, loss_rot6d, loss_grip = model.calculate_loss(pcd, rs_obs, rs_pred, phase=None)
+            loss_xyz, loss_rot6d, loss_grip, _, _ = model.calculate_loss(pcd, rs_obs, rs_pred, phase=None)
         print("[loss] xyz", float(loss_xyz), "rot6d", float(loss_rot6d), "grip", float(loss_grip))
 
         pred = model.infer_y(pcd, rs_obs, phase=phase)
