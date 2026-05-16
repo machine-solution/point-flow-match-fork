@@ -23,7 +23,7 @@ class PhasePredictionConfig:
     enabled: bool = False
     hidden_dim: int = 256
     loss_weight: float = 0.1
-    condition_flow_with_current_phase_train: bool = False
+    condition_flow_with_current_phase_train: bool = True
     use_predicted_phase_for_flow_train: bool = False
     detach_predicted_phase: bool = True
     debug_log: bool = False

@@ -378,41 +378,76 @@ class FMPolicy(ComposerModel, BasePolicy):
             raise RuntimeError("phase_prediction is not enabled on this model")
         return self.phase_head(global_cond)
 
+    @property
+    def phase_pred_cfg(self) -> PhasePredictionConfig:
+        return self._phase_pred_cfg
+
     @staticmethod
     def _phase_class_counts(labels: torch.Tensor, num_phases: int) -> dict[int, int]:
         flat = labels.reshape(-1).to(torch.int64)
         return {int(p): int((flat == p).sum().item()) for p in range(int(num_phases))}
 
+    def _assert_valid_phase(self, phase: torch.Tensor, B: int, T: int) -> torch.Tensor:
+        if phase.dtype != torch.int64:
+            phase = phase.to(torch.int64)
+        if phase.shape != (B, T):
+            raise ValueError(f"phase must be (B,T)={B,T}, got {tuple(phase.shape)}")
+        if torch.any((phase < 0) | (phase >= self.phase_cfg.num_phases)):
+            raise ValueError("phase has values outside [0, num_phases-1].")
+        return phase
+
+    def _phase_flow_training_mode(self) -> str:
+        if not self.phase_pred_enabled:
+            return "full_gt_sequence"
+        if self.phase_pred_cfg.condition_flow_with_current_phase_train:
+            return "current_gt_repeated"
+        if self.phase_pred_cfg.use_predicted_phase_for_flow_train:
+            return "predicted_current_repeated"
+        return "full_gt_sequence"
+
+    def _phase_flow_train_metrics(self, phase_flow: torch.Tensor, phase_gt: torch.Tensor) -> dict[str, float]:
+        mode = self._phase_flow_training_mode()
+        n = max(int(phase_flow.numel()), 1)
+        metrics: dict[str, float] = {
+            "metrics/train/phase_flow_full_gt_sequence": 1.0 if mode == "full_gt_sequence" else 0.0,
+            "metrics/train/phase_flow_current_gt_repeated": 1.0 if mode == "current_gt_repeated" else 0.0,
+            "metrics/train/phase_flow_predicted_current_repeated": 1.0
+            if mode == "predicted_current_repeated"
+            else 0.0,
+            "config/phase_flow_condition_current_phase_train": float(
+                self.phase_pred_cfg.condition_flow_with_current_phase_train
+            )
+            if self.phase_pred_enabled
+            else 0.0,
+        }
+        for p, c in self._phase_class_counts(phase_flow, self.phase_cfg.num_phases).items():
+            metrics[f"metrics/train/phase_flow_dist_{p}"] = float(c) / n
+        for p, c in self._phase_class_counts(phase_gt, self.phase_cfg.num_phases).items():
+            metrics[f"metrics/train/phase_gt_dist_{p}"] = float(c) / max(int(phase_gt.numel()), 1)
+        return metrics
+
     def _phase_for_flow_train(
         self,
         phase: torch.Tensor,
-        global_cond: torch.Tensor,
+        nx: torch.Tensor,
         *,
         B: int,
         T: int,
     ) -> torch.Tensor:
-        """
-        Phase tensor (B,T) for CFM conditioning during training.
-
-        Oracle (phase_prediction off): full GT horizon ``phase``.
-        Learned phase (default): GT current step ``phase[:,0]`` repeated across T (matches inference).
-        Ablations: full GT horizon, or predicted current phase repeated.
-        """
-        if phase.dtype != torch.int64:
-            phase = phase.to(torch.int64)
+        """Phase [B,T] for CFM conditioning during training (matches inference when configured)."""
         if not self.phase_pred_enabled:
             return phase
 
-        if self._phase_pred_cfg.condition_flow_with_current_phase_train:
-            phase_current = phase[:, 0]
-            return phase_current.view(B, 1).expand(B, T)
+        if self.phase_pred_cfg.condition_flow_with_current_phase_train:
+            phase_current_gt = phase[:, 0]
+            return phase_current_gt.view(B, 1).expand(B, T)
 
-        if self._phase_pred_cfg.use_predicted_phase_for_flow_train:
-            logits = self.predict_phase_logits(global_cond)
-            p = logits.argmax(dim=-1)
-            if self._phase_pred_cfg.detach_predicted_phase:
-                p = p.detach()
-            return p.view(B, 1).expand(B, T)
+        if self.phase_pred_cfg.use_predicted_phase_for_flow_train:
+            phase_logits = self.phase_head(nx)
+            phase_current_pred = phase_logits.argmax(dim=-1)
+            if self.phase_pred_cfg.detach_predicted_phase:
+                phase_current_pred = phase_current_pred.detach()
+            return phase_current_pred.view(B, 1).expand(B, T)
 
         return phase
 
@@ -674,12 +709,12 @@ class FMPolicy(ComposerModel, BasePolicy):
             "loss/train/cfm": cfm_loss.item(),
         }
         if phase_loss is not None:
-            metrics.update(phase_metrics)
             loss = cfm_loss + float(self._phase_pred_cfg.loss_weight) * phase_loss
-            metrics["loss/train/total"] = loss.item()
         else:
             loss = cfm_loss
-            metrics["loss/train/total"] = loss.item()
+        metrics["loss/train/total"] = loss.item()
+        if phase_metrics:
+            metrics.update(phase_metrics)
         self.logger.log_metrics(metrics)
         return loss
 
@@ -701,16 +736,16 @@ class FMPolicy(ComposerModel, BasePolicy):
         if self.phase_enabled:
             if phase is None:
                 raise ValueError("phase_conditioning.enabled=true requires phase labels in calculate_loss().")
-            if phase.dtype != torch.int64:
-                phase = phase.to(torch.int64)
-            if phase.shape != (B, T):
-                raise ValueError(f"phase must be (B,T)={B,T}, got {tuple(phase.shape)}")
-            if torch.any((phase < 0) | (phase >= self.phase_cfg.num_phases)):
-                raise ValueError("phase has values outside [0, num_phases-1].")
+            phase = self._assert_valid_phase(phase, B, T)
+
+            # IMPORTANT DEFAULT FALLBACK: oracle phase conditioning (no phase head).
             phase_flow = phase
+
             if self.phase_pred_enabled:
                 phase_loss, phase_metrics = self._compute_phase_aux_loss(nx, phase)
                 phase_flow = self._phase_for_flow_train(phase, nx, B=B, T=T)
+
+            phase_metrics.update(self._phase_flow_train_metrics(phase_flow, phase))
 
         t = self._sample_snr(B)
         z0 = self._init_noise(ny.shape[0])
@@ -762,8 +797,9 @@ class FMPolicy(ComposerModel, BasePolicy):
             "loss/eval/grip": loss_grip.item(),
             "loss/eval/cfm": cfm_loss.item(),
         }
-        if phase_loss is not None:
+        if phase_metrics:
             eval_metrics.update({k.replace("/train/", "/eval/"): v for k, v in phase_metrics.items()})
+        if phase_loss is not None:
             eval_metrics["loss/eval/phase"] = phase_loss.item()
             loss_total = cfm_loss + float(self._phase_pred_cfg.loss_weight) * phase_loss
         else:
