@@ -2,6 +2,7 @@
 enabled: true
 hidden_dim: 256
 loss_weight: 0.1
+condition_flow_with_current_phase_train: true
 use_predicted_phase_for_flow_train: false
 detach_predicted_phase: true
 debug_log: false

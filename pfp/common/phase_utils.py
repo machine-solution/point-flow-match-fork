@@ -23,6 +23,7 @@ class PhasePredictionConfig:
     enabled: bool = False
     hidden_dim: int = 256
     loss_weight: float = 0.1
+    condition_flow_with_current_phase_train: bool = False
     use_predicted_phase_for_flow_train: bool = False
     detach_predicted_phase: bool = True
     debug_log: bool = False
@@ -50,6 +51,11 @@ def phase_prediction_cfg_from(cfg: Any | None) -> PhasePredictionConfig:
     lw = float(
         getattr(cfg, "loss_weight", None) if hasattr(cfg, "loss_weight") else cfg.get("loss_weight", 0.1)
     )
+    cur_phase = bool(
+        getattr(cfg, "condition_flow_with_current_phase_train", None)
+        if hasattr(cfg, "condition_flow_with_current_phase_train")
+        else cfg.get("condition_flow_with_current_phase_train", enabled)
+    )
     use_pred = bool(
         getattr(cfg, "use_predicted_phase_for_flow_train", None)
         if hasattr(cfg, "use_predicted_phase_for_flow_train")
@@ -67,6 +73,7 @@ def phase_prediction_cfg_from(cfg: Any | None) -> PhasePredictionConfig:
         enabled=enabled,
         hidden_dim=hidden_dim,
         loss_weight=lw,
+        condition_flow_with_current_phase_train=cur_phase,
         use_predicted_phase_for_flow_train=use_pred,
         detach_predicted_phase=detach,
         debug_log=debug_log,

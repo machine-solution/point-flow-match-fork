@@ -383,24 +383,38 @@ class FMPolicy(ComposerModel, BasePolicy):
         flat = labels.reshape(-1).to(torch.int64)
         return {int(p): int((flat == p).sum().item()) for p in range(int(num_phases))}
 
-    def _phase_for_flow(
+    def _phase_for_flow_train(
         self,
-        phase_gt: torch.Tensor,
+        phase: torch.Tensor,
         global_cond: torch.Tensor,
         *,
         B: int,
         T: int,
     ) -> torch.Tensor:
-        """Phase tensor (B,T) for CFM conditioning: GT horizon by default; optional predicted."""
-        if phase_gt.dtype != torch.int64:
-            phase_gt = phase_gt.to(torch.int64)
-        if self.phase_pred_enabled and self._phase_pred_cfg.use_predicted_phase_for_flow_train:
+        """
+        Phase tensor (B,T) for CFM conditioning during training.
+
+        Oracle (phase_prediction off): full GT horizon ``phase``.
+        Learned phase (default): GT current step ``phase[:,0]`` repeated across T (matches inference).
+        Ablations: full GT horizon, or predicted current phase repeated.
+        """
+        if phase.dtype != torch.int64:
+            phase = phase.to(torch.int64)
+        if not self.phase_pred_enabled:
+            return phase
+
+        if self._phase_pred_cfg.condition_flow_with_current_phase_train:
+            phase_current = phase[:, 0]
+            return phase_current.view(B, 1).expand(B, T)
+
+        if self._phase_pred_cfg.use_predicted_phase_for_flow_train:
             logits = self.predict_phase_logits(global_cond)
             p = logits.argmax(dim=-1)
             if self._phase_pred_cfg.detach_predicted_phase:
                 p = p.detach()
             return p.view(B, 1).expand(B, T)
-        return phase_gt
+
+        return phase
 
     def _compute_phase_aux_loss(
         self, global_cond: torch.Tensor, phase_gt: torch.Tensor
@@ -693,9 +707,10 @@ class FMPolicy(ComposerModel, BasePolicy):
                 raise ValueError(f"phase must be (B,T)={B,T}, got {tuple(phase.shape)}")
             if torch.any((phase < 0) | (phase >= self.phase_cfg.num_phases)):
                 raise ValueError("phase has values outside [0, num_phases-1].")
+            phase_flow = phase
             if self.phase_pred_enabled:
                 phase_loss, phase_metrics = self._compute_phase_aux_loss(nx, phase)
-            phase_flow = self._phase_for_flow(phase, nx, B=B, T=T)
+                phase_flow = self._phase_for_flow_train(phase, nx, B=B, T=T)
 
         t = self._sample_snr(B)
         z0 = self._init_noise(ny.shape[0])
