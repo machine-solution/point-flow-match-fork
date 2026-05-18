@@ -180,10 +180,14 @@ sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted_phase_conditioned.
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
 
-# Проверка конфига без GPU и без датасета
+# Проверка конфига без GPU и без датасета (нужен соседний diffusion_policy или pip install -e)
+# Скрипт сам добавляет ../diffusion_policy в PYTHONPATH, как sbatch.
 python dexter/verify_training_setup.py \
   --overrides task_name=open_fridge +experiment=pointflowmatch \
   phase_conditioning=enabled phase_prediction=enabled
+
+Если снова `No module named 'diffusion_policy'`: рядом должен быть клон `diffusion_policy`, затем
+`pip install -e ../diffusion_policy` и `pip install -e . --no-deps` из корня PointFlowMatch.
 
 sbatch dexter/run_pointflowmatch_open_fridge_phase_prediction.sbatch
 ```
@@ -375,7 +379,33 @@ python scripts/validate_accuracy.py policy.ckpt_name=<run_name> env_runner.num_e
 
 Базовое обучение (`+experiment=pointflowmatch`) остаётся без временных весов (все шаги равны), а gripper-weighted эксперимент — это отдельный запуск, чекпоинты которого ложатся в свою папку `ckpt/<run_name>/`.
 
-#### 9. Соответствие моделей и sbatch (шпаргалка)
+#### 9. Расписание чекпоинтов (300, 600, 900, 1200, 1500)
+
+По умолчанию `conf/train.yaml` + `checkpoint_schedule=milestones_1500`:
+
+- `save_each_n_epochs: 300`
+- `save_num_checkpoints_to_keep: 5` — не удалять ранние milestone при сохранении поздних
+- `checkpoint_milestones: []` — без дублирующих `milestone_ep*.pt` (экономия диска)
+
+В `ckpt/<run_name>/` будут файлы вида `ep0300-*.pt`, `ep0600-*.pt`, …, `ep1500-*.pt` (плюс `latest-rank0.pt` для autoresume, если задан `run_name`).
+
+**Валидация по эпохам** (локально, 100 эпизодов):
+
+```bash
+# baseline
+bash bash/run_validate_milestone_sweep.sh <run_name> 100 \
+  phase_conditioning=disabled phase_prediction=disabled
+
+# learned phase
+bash bash/run_validate_milestone_sweep.sh <run_name> 100 \
+  phase_conditioning=enabled phase_prediction=enabled
+```
+
+Один эпизод вручную: `policy.ckpt_episode=ep0600`.
+
+Старое поведение (каждые 100 ep, keep 3): `checkpoint_schedule=legacy_every_100`.
+
+#### 10. Соответствие моделей и sbatch (шпаргалка)
 
 | Цель | Slurm / команда | Hydra |
 |------|-----------------|-------|

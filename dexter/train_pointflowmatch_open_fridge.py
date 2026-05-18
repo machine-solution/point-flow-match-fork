@@ -1,7 +1,13 @@
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[1]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from dexter._paths import pythonpath_env, repo_root
 
 
 def main() -> None:
@@ -86,6 +92,12 @@ def main() -> None:
         action="store_true",
         help="Enable online logging to Weights & Biases.",
     )
+    parser.add_argument(
+        "--checkpoint-schedule",
+        type=str,
+        default="milestones_1500",
+        help="Hydra group checkpoint_schedule (milestones_1500 = ep 300,600,900,1200,1500).",
+    )
     args = parser.parse_args()
 
     pc = args.phase_conditioning
@@ -94,9 +106,10 @@ def main() -> None:
     elif pc == "off":
         pc = "disabled"
 
-    repo_root = Path(__file__).resolve().parents[1]
-    train_script = repo_root / "scripts" / "train.py"
-    verify_script = repo_root / "dexter" / "verify_training_setup.py"
+    repo = repo_root()
+    train_script = repo / "scripts" / "train.py"
+    verify_script = repo / "dexter" / "verify_training_setup.py"
+    env = pythonpath_env(repo)
 
     if not train_script.exists():
         raise FileNotFoundError(f"Could not find training script at {train_script}")
@@ -104,8 +117,10 @@ def main() -> None:
     overrides = [
         f"task_name={args.task}",
         f"+experiment={args.experiment}",
+        f"checkpoint_schedule={args.checkpoint_schedule}",
         f"phase_conditioning={pc}",
         f"phase_prediction={args.phase_prediction}",
+        "launch_eval_after_train=false",
     ]
     if args.epochs is not None:
         overrides.append(f"epochs={args.epochs}")
@@ -122,16 +137,18 @@ def main() -> None:
         cmd = [sys.executable, str(verify_script), "--overrides", *overrides]
         print("Running verify:")
         print("  " + " ".join(cmd))
-        subprocess.run(cmd, check=True, cwd=repo_root)
+        subprocess.run(cmd, check=True, cwd=repo, env=env)
         return
 
     cmd_verify = [sys.executable, str(verify_script), "--overrides", *overrides]
-    subprocess.run(cmd_verify, check=True, cwd=repo_root)
+    subprocess.run(cmd_verify, check=True, cwd=repo, env=env)
 
     cmd = [sys.executable, str(train_script), *overrides]
     print("Running training command:")
     print("  " + " ".join(cmd))
-    subprocess.run(cmd, check=True, cwd=repo_root)
+    if env.get("PYTHONPATH"):
+        print(f"  PYTHONPATH={env['PYTHONPATH']}")
+    subprocess.run(cmd, check=True, cwd=repo, env=env)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,11 @@
 seed: 1234
 epochs: 1500
 log_wandb: False
+# Composer rolling saves: interval save_each_n_epochs, keep save_num_checkpoints_to_keep files.
+# With checkpoint_schedule=milestones_1500 → epochs 300,600,900,1200,1500 only.
+save_each_n_epochs: 300
+save_num_checkpoints_to_keep: 5
+checkpoint_milestones: []
 task_name: unplug_charger
 obs_features_dim: 256
 y_dim: 10  # (xyz, rot6d, g)
@@ -8,9 +13,6 @@ x_dim: "${eval: '${obs_features_dim} + ${y_dim}'}"
 n_obs_steps: 2
 n_pred_steps: 32  # Must be divisible by 4
 use_ema: True
-save_each_n_epochs: 100
-# Дополнительно к rolling save_num_checkpoints_to_keep копии в ckpt/<run_name>/milestone_ep{N}.pt
-checkpoint_milestones: [500, 1000]
 obs_mode: pcd  # pcd | rgb
 run_name: null  # optional explicit run name for this training run (no autoresume)
 resume_from_ckpt_name: null  # if set, initialize model weights from ckpt/<name>/*
@@ -64,6 +66,7 @@ lr_scheduler:
 defaults:
   - model: flow
   - backbone: pointnet
+  - checkpoint_schedule: milestones_1500
   # NOTE: avoid YAML 1.1 booleans ("on/off") in defaults
   - phase_conditioning: disabled
   - phase_prediction: disabled

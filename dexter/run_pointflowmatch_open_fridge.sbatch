@@ -76,20 +76,18 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
 echo "=== Disk space before training ==="
 df -h . /tmp 2>/dev/null || df -h .
-echo "=== Starting training ==="
-# Phase-conditioned single model (optional):
-#   export PFP_PHASE_CONDITIONING=enabled
-# Default is disabled.
+echo "=== Starting training (baseline, milestone checkpoints) ==="
+# Checkpoints at epochs 300,600,900,1200,1500 only (see conf/checkpoint_schedule/milestones_1500.yaml).
 PFP_PHASE_CONDITIONING="${PFP_PHASE_CONDITIONING:-disabled}"
-# batch_size=128 (при OOM понизь до 64 в override)
-# Вариант: продолжить обучение, инициализировав веса из ckpt/open_fridge_2302_500/ep500*
-# При желании начни новый ран с нуля — просто убери resume_* и поменяй run_name.
 python scripts/train.py \
     task_name=open_fridge \
     +experiment=pointflowmatch \
+    checkpoint_schedule=milestones_1500 \
     phase_conditioning="${PFP_PHASE_CONDITIONING}" \
+    phase_prediction=disabled \
     dataloader.num_workers=8 \
     dataloader.batch_size=128 \
+    launch_eval_after_train=false \
     log_wandb=False
     # resume_from_ckpt_name=open_fridge_2302_500 \
     # resume_from_ckpt_episode=ep500 \

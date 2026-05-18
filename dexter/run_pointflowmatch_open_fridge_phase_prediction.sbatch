@@ -65,14 +65,16 @@ python dexter/verify_training_setup.py \
     phase_conditioning=enabled \
     phase_prediction=enabled
 
-echo "=== Starting training (learned phase prediction) ==="
+echo "=== Starting training (learned phase, milestone checkpoints) ==="
 python scripts/train.py \
     task_name=open_fridge \
     +experiment=pointflowmatch \
+    checkpoint_schedule=milestones_1500 \
     phase_conditioning=enabled \
     phase_prediction=enabled \
     dataloader.num_workers=8 \
     dataloader.batch_size=128 \
+    launch_eval_after_train=false \
     log_wandb=False
 
 echo "=== Training finished ==="

@@ -1,5 +1,6 @@
 import os
 import shutil
+import sys
 from pathlib import Path
 import hydra
 import wandb
@@ -367,6 +368,21 @@ def main(cfg: OmegaConf):
     if _ms:
         train_callbacks.append(MilestoneCheckpointCopyCallback(list(OmegaConf.to_container(_ms, resolve=True))))
 
+    save_every = int(cfg.save_each_n_epochs)
+    save_keep = int(getattr(cfg, "save_num_checkpoints_to_keep", 5))
+    max_ep = int(cfg.epochs)
+    expected_ckpt_epochs = list(range(save_every, max_ep + 1, save_every))
+    print(
+        f"[checkpoint] save_interval={save_every}ep  save_num_checkpoints_to_keep={save_keep}  "
+        f"expected files at epochs {expected_ckpt_epochs}"
+    )
+    if save_keep < len(expected_ckpt_epochs):
+        print(
+            f"[checkpoint] WARNING: save_num_checkpoints_to_keep={save_keep} < {len(expected_ckpt_epochs)} "
+            f"milestone epochs — older checkpoints may be deleted during training.",
+            file=sys.stderr,
+        )
+
     trainer = Trainer(
         model=composer_model,
         train_dataloader=dataloader_train,
@@ -379,8 +395,8 @@ def main(cfg: OmegaConf):
         loggers=loggers,
         callbacks=train_callbacks,
         save_folder="ckpt/{run_name}",
-        save_interval=f"{cfg.save_each_n_epochs}ep",
-        save_num_checkpoints_to_keep=3,
+        save_interval=f"{save_every}ep",
+        save_num_checkpoints_to_keep=save_keep,
         algorithms=[EMA()] if cfg.use_ema else None,
         run_name=cfg.run_name,
         # Full Composer autoresume (LR, optimizer, epoch) только при run_name и без resume_from_ckpt_name.

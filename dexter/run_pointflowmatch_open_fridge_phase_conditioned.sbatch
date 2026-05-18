@@ -56,13 +56,16 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 echo "=== Disk space before training ==="
 df -h . /tmp 2>/dev/null || df -h .
 
-echo "=== Starting training (phase-conditioned single model) ==="
+echo "=== Starting training (oracle phase, milestone checkpoints) ==="
 python scripts/train.py \
     task_name=open_fridge \
     +experiment=pointflowmatch \
+    checkpoint_schedule=milestones_1500 \
     phase_conditioning=enabled \
+    phase_prediction=disabled \
     dataloader.num_workers=8 \
     dataloader.batch_size=128 \
+    launch_eval_after_train=false \
     log_wandb=False
 
 echo "=== Training finished ==="

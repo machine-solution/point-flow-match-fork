@@ -64,9 +64,12 @@ PFP_PHASE_CONDITIONING="${PFP_PHASE_CONDITIONING:-disabled}"
 python scripts/train.py \
     task_name=open_fridge \
     +experiment=pointflowmatch_gripper_weighted \
+    checkpoint_schedule=milestones_1500 \
     phase_conditioning="${PFP_PHASE_CONDITIONING}" \
+    phase_prediction=disabled \
     dataloader.num_workers=8 \
     dataloader.batch_size=128 \
+    launch_eval_after_train=false \
     log_wandb=False
 
 echo "=== Training finished ==="

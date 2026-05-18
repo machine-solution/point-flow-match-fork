@@ -1,0 +1,6 @@
+# @package _global_
+# Previous default: save every 100 ep, keep last 3 (+ optional milestone copies).
+save_each_n_epochs: 100
+save_num_checkpoints_to_keep: 3
+checkpoint_milestones: [500, 1000]
+epochs: 1500

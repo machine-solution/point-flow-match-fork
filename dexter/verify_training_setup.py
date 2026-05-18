@@ -2,15 +2,28 @@
 """
 Verify Hydra training config instantiates FMPolicy with expected phase settings.
 
-Run from repo root (no GPU / dataset required):
-  python dexter/verify_training_setup.py
-  python dexter/verify_training_setup.py --overrides phase_conditioning=enabled phase_prediction=enabled
+Run from repo root (no GPU / dataset required). Needs diffusion_policy on PYTHONPATH
+(sibling ../diffusion_policy or pip install -e ../diffusion_policy), same as training.
+
+  cd ~/point_flow_match/PointFlowMatch
+  conda activate ./pfp-train-env
+  python dexter/verify_training_setup.py --overrides task_name=open_fridge +experiment=pointflowmatch phase_conditioning=enabled phase_prediction=enabled
 """
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
+
+# Repo root on sys.path so `dexter._paths` and `pfp` import work when invoked as a script.
+_REPO = Path(__file__).resolve().parents[1]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
+from dexter._paths import repo_root, require_diffusion_policy, setup_training_pythonpath
+
+setup_training_pythonpath(_REPO)
+require_diffusion_policy(_REPO)
 
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
@@ -36,7 +49,7 @@ def main() -> None:
     if not OmegaConf.has_resolver("eval"):
         OmegaConf.register_new_resolver("eval", eval)
 
-    repo = Path(__file__).resolve().parents[1]
+    repo = repo_root()
     conf_dir = args.config_dir or (repo / "conf")
     if not conf_dir.is_dir():
         print(f"ERROR: config dir not found: {conf_dir}", file=sys.stderr)

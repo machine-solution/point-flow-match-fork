@@ -82,7 +82,7 @@ def main(cfg: OmegaConf):
         callbacks=[LRMonitor()],
         save_folder="ckpt/{run_name}",
         save_interval=f"{cfg.save_each_n_epochs}ep",
-        save_num_checkpoints_to_keep=3,
+        save_num_checkpoints_to_keep=int(getattr(cfg, "save_num_checkpoints_to_keep", 5)),
         algorithms=[EMA()] if cfg.use_ema else None,
         run_name=cfg.run_name,  # set this to continue training from previous ckpt
         autoresume=True if cfg.run_name is not None else False,
