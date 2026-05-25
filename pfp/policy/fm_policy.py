@@ -3,6 +3,7 @@ import functools
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 import hydra
@@ -273,6 +274,11 @@ class FMPolicy(ComposerModel, BasePolicy):
         self._rollout_log_lines: list[str] = []
         self._rollout_timeline_episode_idx: int = 0
         self._rollout_reset_once: bool = False
+        self.last_infer_nfe: int = 0
+        self._infer_calls_total: int = 0
+        self._infer_actions_total: int = 0
+        self._infer_nfe_total: int = 0
+        self._infer_time_total_ms: float = 0.0
         if self.phase_enabled:
             self.phase_embedding = nn.Embedding(self.phase_cfg.num_phases, self.phase_cfg.phase_embed_dim)
         else:
@@ -348,6 +354,24 @@ class FMPolicy(ComposerModel, BasePolicy):
     def set_num_k_infer(self, num_k_infer: int):
         self.num_k_infer = num_k_infer
         return
+
+    def reset_inference_diagnostics(self) -> None:
+        self.last_infer_nfe = 0
+        self._infer_calls_total = 0
+        self._infer_actions_total = 0
+        self._infer_nfe_total = 0
+        self._infer_time_total_ms = 0.0
+
+    def get_inference_diagnostics(self) -> dict:
+        actions = max(self._infer_actions_total, 1)
+        return {
+            "infer_calls_total": int(self._infer_calls_total),
+            "infer_actions_total": int(self._infer_actions_total),
+            "infer_nfe_total": int(self._infer_nfe_total),
+            "infer_time_total_ms": float(self._infer_time_total_ms),
+            "mean_infer_ms_per_action": float(self._infer_time_total_ms / actions),
+            "mean_nfe_per_action": float(self._infer_nfe_total / actions),
+        }
 
     def _slice_velocity(self, vel_full: torch.Tensor) -> torch.Tensor:
         """
@@ -830,6 +854,8 @@ class FMPolicy(ComposerModel, BasePolicy):
         noise=None,
         return_traj=False,
     ) -> torch.Tensor:
+        infer_t0 = time.perf_counter()
+        nfe_this_call = 0
         nx = self.encode_obs(pcd, robot_state_obs)
         B = nx.shape[0]
         z = self._init_noise(B) if noise is None else noise
@@ -958,10 +984,18 @@ class FMPolicy(ComposerModel, BasePolicy):
             else:
                 z_in = z
             vel_full = self.diffusion_net(z_in, timesteps, global_cond=nx)
+            nfe_this_call += 1
             vel = self._slice_velocity(vel_full)
             z = z.detach().clone() + vel * dt[i]
             assert z.shape[-1] == D
             traj.append(z)
+
+        infer_ms = (time.perf_counter() - infer_t0) * 1000.0
+        self.last_infer_nfe = int(nfe_this_call)
+        self._infer_calls_total += 1
+        self._infer_actions_total += int(B)
+        self._infer_nfe_total += int(nfe_this_call) * int(B)
+        self._infer_time_total_ms += float(infer_ms)
 
         if return_traj:
             return torch.stack(traj)

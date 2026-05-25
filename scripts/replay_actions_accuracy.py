@@ -52,7 +52,7 @@ def main(cfg: OmegaConf):
     env_config.setdefault("vis", False)
 
     env_runner = RLBenchRunnerReplay(input_file=str(p), env_config=env_config, verbose=cfg.get("verbose", False))
-    success_list, steps_list = env_runner.run()
+    success_list, steps_list, _ = env_runner.run()
 
     n = len(success_list)
     n_success = sum(success_list)

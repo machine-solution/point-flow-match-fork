@@ -98,7 +98,7 @@ def main(cfg: OmegaConf):
     )
 
     env_runner = RLBenchRunner(**cfg.env_runner)
-    success_list, steps_list = env_runner.run(policy)
+    success_list, steps_list, _ = env_runner.run(policy)
 
     n = len(success_list)
     n_success = sum(success_list)

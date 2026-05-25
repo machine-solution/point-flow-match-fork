@@ -20,6 +20,9 @@ if not hasattr(_cuda_gs, "_refresh_per_optimizer_state"):
     except ImportError:
         pass
 
+import json
+from pathlib import Path
+
 import hydra
 import wandb
 from omegaconf import OmegaConf, open_dict
@@ -65,7 +68,9 @@ def main(cfg: OmegaConf):
         phase_rollout=getattr(cfg, "phase_rollout", None),
     )
     env_runner = RLBenchRunner(**cfg.env_runner)
-    success_list, steps_list = env_runner.run(policy)
+    success_list, steps_list, steps_per_episode, diagnostics = env_runner.run(
+        policy, return_diagnostics=True
+    )
 
     n = len(success_list)
     n_success = sum(success_list)
@@ -74,6 +79,36 @@ def main(cfg: OmegaConf):
     if steps_list:
         avg_steps = sum(steps_list) / len(steps_list)
         print(f"Avg steps (successful): {avg_steps:.1f}")
+
+    export = {
+        "ckpt_name": str(cfg.policy.ckpt_name),
+        "ckpt_episode": str(cfg.policy.get("ckpt_episode", "latest")),
+        "task_name": str(cfg.env_runner.env_config.task_name),
+        "seed": int(cfg.seed),
+        "num_episodes": int(n),
+        "max_episode_length": int(cfg.env_runner.max_episode_length),
+        "num_success": int(n_success),
+        "accuracy": float(acc),
+        "avg_steps_successful": float(sum(steps_list) / len(steps_list)) if steps_list else None,
+        "mean_inference_ms": float(diagnostics.get("mean_inference_ms", 0.0)),
+        "std_inference_ms": float(diagnostics.get("std_inference_ms", 0.0)),
+        "nfe_per_action": float(diagnostics.get("nfe_per_action", 0.0)),
+        "mean_episode_time_s": float(diagnostics.get("mean_episode_time_s", 0.0)),
+        "policy_inference_diagnostics": diagnostics.get("policy_inference_diagnostics", {}),
+        "phase_conditioning": str(getattr(cfg, "phase_conditioning", None)),
+        "phase_prediction": str(getattr(cfg, "phase_prediction", None)),
+        "episodes": [
+            {"episode_idx": i, "success": bool(s), "steps": int(steps_per_episode[i])}
+            for i, s in enumerate(success_list)
+        ],
+    }
+    out_json = getattr(cfg, "results_json", None)
+    if out_json:
+        out_path = Path(out_json).expanduser().resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(export, indent=2), encoding="utf-8")
+        print(f"Wrote results JSON: {out_path}")
+
     return success_list
 
 

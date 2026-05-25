@@ -13,6 +13,7 @@ cd "$REPO_ROOT"
 
 CKPT_NAME="${1:?ckpt run name required}"
 NUM_EP="${2:-100}"
+SEED="${SEED:-228}"
 shift 2 || true
 EXTRA_HYDRA=("$@")
 
@@ -38,17 +39,20 @@ DIFFUSION_ABS="$(cd "$REPO_ROOT/../diffusion_policy" 2>/dev/null && pwd)"
 RESULTS_DIR="$REPO_ROOT/results/milestone_sweep_${CKPT_NAME}"
 mkdir -p "$RESULTS_DIR"
 SUMMARY="$RESULTS_DIR/summary.txt"
-echo "milestone sweep: $CKPT_NAME  episodes=$NUM_EP" | tee "$SUMMARY"
+echo "milestone sweep: $CKPT_NAME  episodes=$NUM_EP  seed=$SEED" | tee "$SUMMARY"
 echo "extra hydra: ${EXTRA_HYDRA[*]:-<none>}" | tee -a "$SUMMARY"
 echo "---" | tee -a "$SUMMARY"
 
 for EP in "${MILESTONES[@]}"; do
     OUT="$RESULTS_DIR/ep${EP}.txt"
     echo "=== ep${EP} ===" | tee -a "$SUMMARY"
+    JSON_OUT="$RESULTS_DIR/ep${EP}.json"
     conda run --no-capture-output -n "$CONDA_ENV" python scripts/validate_accuracy.py \
         policy.ckpt_name="$CKPT_NAME" \
         policy.ckpt_episode="ep${EP}" \
         env_runner.num_episodes="$NUM_EP" \
+        seed="$SEED" \
+        results_json="$JSON_OUT" \
         "${EXTRA_HYDRA[@]}" 2>&1 | tee "$OUT"
     ACC=$(grep -E '^Accuracy:' "$OUT" | tail -1 || true)
     echo "ep${EP}: ${ACC:-FAILED}" | tee -a "$SUMMARY"

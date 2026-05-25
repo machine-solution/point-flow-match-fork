@@ -1,5 +1,7 @@
 seed: 5678
 log_wandb: False
+# Optional path to write per-run JSON (scripts/validate_accuracy.py)
+results_json: null
 
 env_runner:
   num_episodes: 300
