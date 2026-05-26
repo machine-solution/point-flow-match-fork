@@ -23,7 +23,7 @@ def main() -> None:
     ap.add_argument(
         "--overrides",
         nargs="*",
-        default=["model=meanflow", "phase_conditioning=disabled", "phase_prediction=disabled", "phase_rollout=disabled"],
+        default=["+experiment=pointflowmatch_meanflow"],
     )
     args = ap.parse_args()
 
@@ -48,12 +48,17 @@ def main() -> None:
     print(f"num_k_infer={getattr(model, 'num_k_infer', None)}")
     print(f"interval_embed_dim={getattr(model, 'interval_embed_dim', None)}")
     print(f"meanflow_enabled={getattr(model, 'meanflow_enabled', None)}")
+    n_params = sum(p.numel() for p in model.parameters())
+    n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"params_total={n_params:,} trainable={n_train:,}")
 
     # Dummy train-path loss call (no environment dependencies).
     B = 2
     pcd = torch.randn(B, cfg.n_obs_steps, cfg.dataset.n_points, 3)
     robot_state_obs = torch.randn(B, cfg.n_obs_steps, cfg.y_dim)
     robot_state_pred = torch.randn(B, cfg.n_pred_steps, cfg.y_dim)
+    print("===== Dummy Shapes =====")
+    print(f"pcd={tuple(pcd.shape)} robot_state_obs={tuple(robot_state_obs.shape)} robot_state_pred={tuple(robot_state_pred.shape)}")
     with torch.no_grad():
         loss_xyz, loss_rot6d, loss_grip, _, _ = model.calculate_loss(
             pcd, robot_state_obs, robot_state_pred, phase=None

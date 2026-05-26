@@ -66,7 +66,8 @@ def _configure_runtime_env() -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt-name", required=True)
+    ap.add_argument("--ckpt-name", default=None, help="Checkpoint run name under ckpt/.")
+    ap.add_argument("--checkpoint", default=None, help="Alias for --ckpt-name.")
     ap.add_argument("--ckpt-episode", default="ep1500")
     ap.add_argument("--num-episodes", type=int, default=50)
     ap.add_argument("--max-episode-length", type=int, default=120)
@@ -81,8 +82,8 @@ def main() -> None:
     ap.add_argument(
         "--output-csv",
         type=Path,
-        default=None,
-        help="Default: results/efficiency/k_sweep_<ckpt-name>.csv",
+        default=Path("results/efficiency/k_sweep.csv"),
+        help="Output CSV path (default: results/efficiency/k_sweep.csv).",
     )
     ap.add_argument(
         "--output-json",
@@ -96,22 +97,22 @@ def main() -> None:
         help="If output CSV exists, load rows and skip already completed K values.",
     )
     args = ap.parse_args()
+    ckpt_name = args.ckpt_name or args.checkpoint
+    if not ckpt_name:
+        raise SystemExit("Provide --ckpt-name <name> (or --checkpoint <name>).")
 
     ks = _parse_ks(args.ks)
-    ckpt_dir = REPO_DIRS.CKPT / args.ckpt_name
+    ckpt_dir = REPO_DIRS.CKPT / ckpt_name
     if not ckpt_dir.exists():
         raise FileNotFoundError(f"Checkpoint directory not found: {ckpt_dir}")
 
     _configure_runtime_env()
-    output_csv = args.output_csv
-    if output_csv is None:
-        output_csv = REPO_DIRS.ROOT / "results" / "efficiency" / f"k_sweep_{args.ckpt_name}.csv"
-    output_csv = output_csv.expanduser().resolve()
+    output_csv = args.output_csv.expanduser().resolve()
     output_csv.parent.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict] = []
     details = {
-        "checkpoint": args.ckpt_name,
+        "checkpoint": ckpt_name,
         "checkpoint_episode": args.ckpt_episode,
         "seed": int(args.seed),
         "num_episodes": int(args.num_episodes),
@@ -173,6 +174,7 @@ def main() -> None:
     phase_conditioning = args.phase_conditioning
     phase_prediction = args.phase_prediction
     script_path = (REPO_DIRS.ROOT / "scripts" / "validate_accuracy.py").resolve()
+    failed_ks: list[int] = []
     for k in ks:
         if k in done_k:
             print(f"Skip K={k}: already present in {output_csv}")
@@ -184,7 +186,7 @@ def main() -> None:
         cmd = [
             sys.executable,
             str(script_path),
-            f"policy.ckpt_name={args.ckpt_name}",
+            f"policy.ckpt_name={ckpt_name}",
             f"policy.ckpt_episode={args.ckpt_episode}",
             f"policy.num_k_infer={int(k)}",
             f"env_runner.num_episodes={int(args.num_episodes)}",
@@ -212,9 +214,11 @@ def main() -> None:
             print(f"K={k} failed with exit={proc.returncode}", file=sys.stderr)
             print(proc.stdout[-4000:], file=sys.stderr)
             print(proc.stderr[-4000:], file=sys.stderr)
+            failed_ks.append(int(k))
             continue
         if not tmp_json.exists():
             print(f"K={k} failed: missing result JSON {tmp_json}", file=sys.stderr)
+            failed_ks.append(int(k))
             continue
         run = json.loads(tmp_json.read_text(encoding="utf-8"))
         n = int(run["num_episodes"])
@@ -233,7 +237,7 @@ def main() -> None:
         except OSError:
             pass
         row = {
-            "checkpoint": args.ckpt_name,
+            "checkpoint": ckpt_name,
             "ckpt_episode": args.ckpt_episode,
             "num_k_infer": int(k),
             "num_episodes": int(n),
@@ -269,6 +273,8 @@ def main() -> None:
         print(f"Wrote JSON: {out_json}")
 
     wandb.finish()
+    if failed_ks:
+        raise SystemExit(f"K-sweep failed for K values: {failed_ks}")
 
 
 if __name__ == "__main__":

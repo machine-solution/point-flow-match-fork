@@ -11,6 +11,7 @@ from pathlib import Path
 
 import hydra
 import torch
+from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 _diffusion_policy_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "diffusion_policy")
@@ -20,6 +21,21 @@ if os.path.exists(_diffusion_policy_path) and _diffusion_policy_path not in sys.
 from pfp import DATA_DIRS, DEVICE, REPO_DIRS, set_seeds
 from pfp.data.dataset_images import RobotDatasetImages
 from pfp.data.dataset_pcd import RobotDatasetPcd
+
+
+class _NoopLogger:
+    def log_metrics(self, *_args, **_kwargs):
+        return
+
+
+def _load_train_cfg(path: Path) -> OmegaConf:
+    path = path.expanduser().resolve()
+    conf_dir = (Path(__file__).resolve().parents[1] / "conf").resolve()
+    if path == (conf_dir / "train.yaml"):
+        with initialize_config_dir(version_base=None, config_dir=str(conf_dir)):
+            cfg = compose(config_name="train")
+        return cfg
+    return OmegaConf.load(path)
 
 
 def _resolve_dataset_path(cfg: OmegaConf, *, train: bool) -> Path:
@@ -57,16 +73,28 @@ def main() -> None:
     args = ap.parse_args()
 
     set_seeds(args.seed)
-    cfg = OmegaConf.load(args.train_config)
+    cfg = _load_train_cfg(args.train_config)
+    if not OmegaConf.has_resolver("eval"):
+        OmegaConf.register_new_resolver("eval", eval)
     OmegaConf.resolve(cfg)
     if args.batch_size is not None:
         cfg.dataloader.batch_size = int(args.batch_size)
 
     data_path = _resolve_dataset_path(cfg, train=True)
     if not data_path.exists():
-        raise FileNotFoundError(
-            f"Dataset path not found: {data_path}. Set dataset_path_train or ensure data is present."
-        )
+        fallback_task = "open_fridge"
+        fallback_path = (DATA_DIRS.PFP / fallback_task / "train").resolve()
+        if str(cfg.task_name) != fallback_task and fallback_path.exists():
+            print(
+                f"[benchmark_train_step] dataset for task={cfg.task_name} not found at {data_path}; "
+                f"falling back to task={fallback_task}"
+            )
+            cfg.task_name = fallback_task
+            data_path = fallback_path
+        else:
+            raise FileNotFoundError(
+                f"Dataset path not found: {data_path}. Set dataset_path_train or ensure data is present."
+            )
     if cfg.obs_mode == "pcd":
         ds = RobotDatasetPcd(data_path, phase_conditioning=getattr(cfg, "phase_conditioning", None), **cfg.dataset)
     elif cfg.obs_mode == "rgb":
@@ -88,6 +116,7 @@ def main() -> None:
         phase_prediction=getattr(cfg, "phase_prediction", None),
         phase_rollout=getattr(cfg, "phase_rollout", None),
     )
+    model.logger = _NoopLogger()
     print(f"[model] class={model.__class__.__name__} target={cfg.model._target_}")
     print(f"[model] num_k_infer={getattr(model, 'num_k_infer', None)}")
     if hasattr(model, "meanflow_enabled"):

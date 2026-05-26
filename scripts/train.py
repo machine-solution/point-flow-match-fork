@@ -2,6 +2,9 @@ import os
 import shutil
 import sys
 from pathlib import Path
+_diffusion_policy_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "diffusion_policy")
+if os.path.exists(_diffusion_policy_path) and _diffusion_policy_path not in sys.path:
+    sys.path.insert(0, _diffusion_policy_path)
 import hydra
 import wandb
 import subprocess
@@ -229,6 +232,10 @@ def main(cfg: OmegaConf):
     OmegaConf.resolve(cfg)
     print(OmegaConf.to_yaml(cfg))
     set_seeds(cfg.seed)
+    max_duration = cfg.epochs
+    if hasattr(cfg, "trainer") and getattr(cfg.trainer, "max_duration", None) is not None:
+        max_duration = cfg.trainer.max_duration
+    print(f"[train] max_duration={max_duration} (epochs field={cfg.epochs})")
 
     use_val = bool(getattr(cfg, "use_validation", True))
     data_path_train = _resolve_dataset_path(cfg, train=True)
@@ -395,7 +402,7 @@ def main(cfg: OmegaConf):
         model=composer_model,
         train_dataloader=dataloader_train,
         eval_dataloader=dataloader_valid,
-        max_duration=cfg.epochs,
+        max_duration=max_duration,
         optimizers=optimizer,
         schedulers=lr_scheduler,
         step_schedulers_every_batch=True,

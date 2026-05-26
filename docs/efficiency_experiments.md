@@ -1,121 +1,119 @@
-# Efficiency Experiments: PointFlowMatch
+# Efficiency Experiments (Dexter-Only)
 
-This document defines a gated workflow for architecture changes focused on efficiency.
+This document is Dexter-oriented. Heavy training, RLBench validation, and benchmarks should be submitted on Dexter using the wrapper scripts in `bash/`.
 
-## Why K-sweep Comes First
+## Repository Mapping (Expected -> Actual)
 
-Before implementing a new architecture, check whether baseline quality already holds at low `num_k_infer`.
+All expected paths match the repository exactly.
 
-- If baseline at `K=1` is close to `K=10`, reducing K is already enough and MeanFlow is not a meaningful contribution.
-- If baseline at `K=1` degrades strongly vs `K=10`, there is a quality-efficiency gap worth closing with one-step MeanFlow.
+- `conf/train.yaml` -> `conf/train.yaml`
+- `conf/model/flow.yaml` -> `conf/model/flow.yaml`
+- `conf/model/meanflow.yaml` -> `conf/model/meanflow.yaml`
+- `conf/experiment/pointflowmatch.yaml` -> `conf/experiment/pointflowmatch.yaml`
+- `conf/experiment/pointflowmatch_meanflow.yaml` -> `conf/experiment/pointflowmatch_meanflow.yaml`
+- `pfp/policy/fm_policy.py` -> `pfp/policy/fm_policy.py`
+- `pfp/policy/meanflow_policy.py` -> `pfp/policy/meanflow_policy.py`
+- `pfp/policy/base_policy.py` -> `pfp/policy/base_policy.py`
+- `pfp/envs/rlbench_runner.py` -> `pfp/envs/rlbench_runner.py`
+- `scripts/train.py` -> `scripts/train.py`
+- `scripts/debug_meanflow_config.py` -> `scripts/debug_meanflow_config.py`
+- `scripts/sweep_num_k_infer.py` -> `scripts/sweep_num_k_infer.py`
+- `scripts/benchmark_inference_latency.py` -> `scripts/benchmark_inference_latency.py`
+- `scripts/benchmark_train_step.py` -> `scripts/benchmark_train_step.py`
+- `scripts/count_policy_params.py` -> `scripts/count_policy_params.py`
+- `bash/run_validate_accuracy.sh` -> `bash/run_validate_accuracy.sh`
 
-## Decision Rule
+## MeanFlow Summary
 
-Run baseline K-sweep first (`K in {1,2,4,6,8,10}`) on a fixed checkpoint and seed.
+MeanFlow predicts interval-averaged velocity and runs one-step inference by design.
 
-- **Case A (MeanFlow path):** `K=1` is much worse than `K=10` (example: 50% vs <=30-35%).
-- **Case B (LatentPFM path):** `K=1` is close to `K=10` (example: 50% vs >=45%).
+- Architecture branch: `MeanFlowPolicy` (`pfp/policy/meanflow_policy.py`)
+- Config: `conf/model/meanflow.yaml`
+- Inference expectation:
+  - `nfe_per_action`: `10 -> 1` (relative to baseline `K=10`)
+  - lower inference latency
 
-Do not implement both paths at once.
+## Decision Logic (from K-sweep)
 
-## Scripts
+Run baseline K-sweep first and compare `K=1` vs `K=10`.
 
-- `scripts/sweep_num_k_infer.py`: success + latency + NFE vs K, writes `results/efficiency/k_sweep_*.csv`.
-- `scripts/benchmark_inference_latency.py`: micro-benchmark inference time and NFE.
-- `scripts/count_policy_params.py`: total/trainable params and module breakdown.
-- `scripts/benchmark_train_step.py`: one train step wall-time and peak GPU memory.
+- If `K=1` is close to `K=10` -> MeanFlow is not needed.
+- If `K=1` is much worse than `K=10` -> proceed with MeanFlow.
 
-## Repro Commands
+Current status: baseline showed strong degradation at `K=1`; MeanFlow branch selected.
 
-### 1) Baseline K-sweep (mandatory first step)
+## Dexter Scripts (Copy-Paste)
 
-```bash
-python scripts/sweep_num_k_infer.py \
-  --ckpt-name 1779122560-baseline-many-ckpts \
-  --ckpt-episode ep1500 \
-  --num-episodes 50 \
-  --max-episode-length 120 \
-  --seed 5678 \
-  --ks 1,2,4,6,8,10 \
-  --phase-conditioning disabled \
-  --phase-prediction disabled \
-  --output-csv results/efficiency/k_sweep_baseline_ep1500.csv
-```
-
-### MeanFlow Training / Eval Commands
-
-Train MeanFlow:
-
-```bash
-python scripts/train.py \
-  task_name=open_fridge \
-  +experiment=pointflowmatch_meanflow
-```
-
-Validate MeanFlow checkpoint:
+### 1) MeanFlow Training
 
 ```bash
-bash bash/run_validate_accuracy.sh <ckpt_name> 100
+TASK_NAME=open_fridge \
+EXPERIMENT=pointflowmatch_meanflow \
+RUN_NAME=meanflow_open_fridge_ep1500 \
+bash bash/dexter_train_meanflow.sh
 ```
 
-Latency benchmark for a MeanFlow checkpoint:
+Main train command inside job:
 
 ```bash
-python scripts/benchmark_inference_latency.py \
-  --ckpt-name <ckpt_name> \
-  --ckpt-episode latest \
-  --num-k-infer 1
+python scripts/train.py task_name=open_fridge +experiment=pointflowmatch_meanflow
 ```
 
-### 2) Parameter count
+### 2) MeanFlow Validation
 
 ```bash
-python scripts/count_policy_params.py \
-  --ckpt-name 1779122560-baseline-many-ckpts \
-  --ckpt-episode ep1500 \
-  --num-k-infer 10 \
-  --output-csv results/efficiency/params.csv
+CKPT_NAME=<MEANFLOW_CKPT_NAME> \
+NUM_EPISODES=100 \
+bash bash/dexter_validate_meanflow.sh
 ```
 
-### 3) Inference latency benchmark
+Validation entrypoint inside job:
 
 ```bash
-python scripts/benchmark_inference_latency.py \
-  --ckpt-name 1779122560-baseline-many-ckpts \
-  --ckpt-episode ep1500 \
-  --num-k-infer 10 \
-  --batch-size 1 \
-  --warmup-iters 20 \
-  --timed-iters 100 \
-  --output-csv results/efficiency/latency.csv
+bash bash/run_validate_accuracy.sh <CKPT_NAME> <NUM_EPISODES>
 ```
 
-### 4) Train-step benchmark
+### 3) Baseline K-sweep Validation
 
 ```bash
-python scripts/benchmark_train_step.py \
-  --train-config conf/train.yaml \
-  --batch-size 64 \
-  --output-csv results/efficiency/train_step.csv
+CKPT_NAME=<BASELINE_CKPT_NAME> \
+CKPT_EPISODE=ep1500 \
+NUM_EPISODES=100 \
+KS=1,2,4,6,8,10 \
+bash bash/dexter_sweep_num_k_infer.sh
 ```
 
-## Required Result Tables
+Output:
 
-Store all benchmark outputs under `results/efficiency/`.
+- `results/efficiency/k_sweep_<CKPT_NAME>.csv`
+- `results/efficiency/k_sweep_<CKPT_NAME>.json`
 
-- `k_sweep*.csv`
-- `latency.csv`
-- `params.csv`
-- `train_step.csv`
-- `eval_success.csv` (from evaluation runs)
+### 4) MeanFlow Benchmark (Latency + Params)
 
-## Current Decision (Baseline K-sweep)
+```bash
+CKPT_NAME=<MEANFLOW_CKPT_NAME> \
+CKPT_EPISODE=latest \
+NUM_K_INFER=1 \
+bash bash/dexter_benchmark_meanflow.sh
+```
 
-From `results/efficiency/k_sweep_baseline_ep1500_seed5678_n100_k1_k10.csv`:
+Outputs:
 
-- `K=1`: success_rate `0.10` (10/100), mean_inference_ms `718.29`
-- `K=10`: success_rate `0.28` (28/100), mean_inference_ms `3179.22`
+- `results/efficiency/latency.csv`
+- `results/efficiency/params.csv`
 
-This is **Case A** (`K=1` degrades strongly vs `K=10`), so the next architecture branch is:
+## Comparison Table to Produce
 
-- **MeanFlow / one-step PointFlowMatch**
+Use Dexter runs to compare:
+
+- baseline `K=10`
+- baseline `K=1`
+- MeanFlow `K=1`
+
+Recommended metrics:
+
+- success rate
+- `nfe_per_action`
+- mean inference latency
+- mean episode time
+- parameter count

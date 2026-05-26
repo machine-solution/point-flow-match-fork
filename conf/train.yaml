@@ -27,6 +27,10 @@ use_validation: true
 # После trainer.fit() запустить bash/start_eval.sh (на кластере обычно выключить)
 launch_eval_after_train: true
 
+trainer:
+  # Optional Composer max_duration override, e.g. 100ba for smoke runs.
+  max_duration: null
+
 
 # env_runner:
 #   num_episodes: 20
