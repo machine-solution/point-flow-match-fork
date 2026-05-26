@@ -180,15 +180,6 @@ sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted_phase_conditioned.
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
 
-# Проверка конфига без GPU и без датасета (нужен соседний diffusion_policy или pip install -e)
-# Скрипт сам добавляет ../diffusion_policy в PYTHONPATH, как sbatch.
-python dexter/verify_training_setup.py \
-  --overrides task_name=open_fridge +experiment=pointflowmatch \
-  phase_conditioning=enabled phase_prediction=enabled
-
-Если снова `No module named 'diffusion_policy'`: рядом должен быть клон `diffusion_policy`, затем
-`pip install -e ../diffusion_policy` и `pip install -e . --no-deps` из корня PointFlowMatch.
-
 sbatch dexter/run_pointflowmatch_open_fridge_phase_prediction.sbatch
 ```
 
@@ -203,6 +194,14 @@ sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted_phase_prediction.s
 ```bash
 python dexter/train_pointflowmatch_open_fridge.py \
   --phase-conditioning enabled --phase-prediction enabled
+```
+
+**MeanFlow (новая модель, готовый sbatch):**
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+conda activate ./pfp-train-env
+sbatch dexter/run_pointflowmatch_open_fridge_meanflow.sbatch
 ```
 
 **Двухфазное обучение (pre, затем post)** — из корня репозитория, окружение `pfp-train-env` уже используется внутри `.sbatch` (как в `run_pointflowmatch_open_fridge.sbatch`):
