@@ -1,3 +1,8 @@
+1) Идея: сравнить phased и baseline на milestones 300/600/900/1200/1500 (n=50, max_steps=120) -> итог: phased лучше только на ep1200 (34% vs 26%), в остальных точках хуже или не лучше.
+2) Идея: проверить нужен ли K=10 (baseline K-sweep) -> итог на n=100: K=1 даёт 10% (10/100), K=10 даёт 28% (28/100), то есть one-step baseline сильно проседает по качеству.
+3) Идея: оценить ускорение K=1 против K=10 -> итог: mean_inference_ms 718.29 vs 3179.22 (~4.43x быстрее), mean_episode_time_s 152.85 vs 388.01 (~2.54x быстрее).
+4) Идея: выбрать ветку по правилу Case A/B -> итог: Case A, переходим в MeanFlow (one-step baseline недостаточно качественный).
+5) Идея: сделать воспроизводимый запуск на Dexter -> итог: подготовлены отдельные команды train/validate/k-sweep/benchmark для копипаста.
 # Efficiency Experiments (Dexter-Only)
 
 This document is Dexter-oriented. Heavy training, RLBench validation, and benchmarks should be submitted on Dexter using the wrapper scripts in `bash/`.
