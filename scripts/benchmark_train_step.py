@@ -88,6 +88,14 @@ def main() -> None:
         phase_prediction=getattr(cfg, "phase_prediction", None),
         phase_rollout=getattr(cfg, "phase_rollout", None),
     )
+    print(f"[model] class={model.__class__.__name__} target={cfg.model._target_}")
+    print(f"[model] num_k_infer={getattr(model, 'num_k_infer', None)}")
+    if hasattr(model, "meanflow_enabled"):
+        print(
+            f"[model] meanflow.enabled={getattr(model, 'meanflow_enabled', None)} "
+            f"one_step={getattr(model, 'meanflow_one_step', None)} "
+            f"interval_embed_dim={getattr(model, 'interval_embed_dim', None)}"
+        )
     model.to(DEVICE)
     model.train()
     optimizer = hydra.utils.instantiate(cfg.optimizer, model.parameters())

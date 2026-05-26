@@ -67,6 +67,14 @@ def main(cfg: OmegaConf):
         phase_prediction=getattr(cfg, "phase_prediction", None),
         phase_rollout=getattr(cfg, "phase_rollout", None),
     )
+    print(f"[model] class={policy.__class__.__name__} target={train_cfg.model._target_}")
+    print(f"[model] num_k_infer={getattr(policy, 'num_k_infer', None)}")
+    if hasattr(policy, "meanflow_enabled"):
+        print(
+            f"[model] meanflow.enabled={getattr(policy, 'meanflow_enabled', None)} "
+            f"one_step={getattr(policy, 'meanflow_one_step', None)} "
+            f"meanflow_nfe={getattr(policy, 'meanflow_nfe', None)}"
+        )
     env_runner = RLBenchRunner(**cfg.env_runner)
     success_list, steps_list, steps_per_episode, diagnostics = env_runner.run(
         policy, return_diagnostics=True

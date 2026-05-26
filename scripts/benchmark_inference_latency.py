@@ -63,6 +63,14 @@ def main() -> None:
         phase_prediction=getattr(cfg, "phase_prediction", None),
         phase_rollout=getattr(cfg, "phase_rollout", None),
     )
+    print(f"[model] class={policy.__class__.__name__} target={cfg.model._target_}")
+    print(f"[model] num_k_infer={getattr(policy, 'num_k_infer', None)}")
+    if hasattr(policy, "meanflow_enabled"):
+        print(
+            f"[model] meanflow.enabled={getattr(policy, 'meanflow_enabled', None)} "
+            f"one_step={getattr(policy, 'meanflow_one_step', None)} "
+            f"interval_embed_dim={getattr(policy, 'interval_embed_dim', None)}"
+        )
     if hasattr(policy, "reset_inference_diagnostics"):
         policy.reset_inference_diagnostics()
 

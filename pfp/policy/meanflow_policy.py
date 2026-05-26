@@ -33,6 +33,7 @@ class MeanFlowPolicy(FMPolicy):
         self.interval_hidden_dim = int(interval_hidden_dim)
         self.meanflow_enabled = True if meanflow is None else bool(meanflow.get("enabled", True))
         self.meanflow_one_step = True if meanflow is None else bool(meanflow.get("one_step", True))
+        self.meanflow_nfe: int = 0
         self.interval_mlp = nn.Sequential(
             nn.Linear(3, self.interval_hidden_dim),
             nn.ReLU(),
@@ -40,6 +41,17 @@ class MeanFlowPolicy(FMPolicy):
         )
         # MeanFlow is designed as one-step. Keep API-compatible setter but pin NFE to 1.
         self.num_k_infer = 1
+        logger.info(
+            "[MeanFlow] enabled=%s one_step=%s num_k_infer=%d interval_embed_dim=%d",
+            self.meanflow_enabled,
+            self.meanflow_one_step,
+            self.num_k_infer,
+            self.interval_embed_dim,
+        )
+        print(
+            f"[MeanFlow] enabled={self.meanflow_enabled} one_step={self.meanflow_one_step} "
+            f"num_k_infer={self.num_k_infer} interval_embed_dim={self.interval_embed_dim}"
+        )
 
     def set_num_k_infer(self, num_k_infer: int):
         if int(num_k_infer) != 1:
@@ -153,6 +165,7 @@ class MeanFlowPolicy(FMPolicy):
         return_traj=False,
     ) -> torch.Tensor:
         t0 = time.perf_counter()
+        self.meanflow_nfe = 0
 
         nx = self.encode_obs(pcd, robot_state_obs)
         B = nx.shape[0]
@@ -169,6 +182,7 @@ class MeanFlowPolicy(FMPolicy):
         timesteps = r.view(B) * self.pos_emb_scale if self.time_conditioning else None
         global_cond = self._interval_global_cond(nx, r, t)
         u_pred_full = self.diffusion_net(z_in, timesteps, global_cond=global_cond)
+        self.meanflow_nfe += 1
         u_pred = self._slice_velocity(u_pred_full)
         pred = z0 + u_pred
 
@@ -178,6 +192,8 @@ class MeanFlowPolicy(FMPolicy):
         self._infer_actions_total += int(B)
         self._infer_nfe_total += int(B)
         self._infer_time_total_ms += float((time.perf_counter() - t0) * 1000.0)
+        if self.meanflow_nfe != 1:
+            raise RuntimeError(f"[MeanFlow] expected exactly one diffusion call, got {self.meanflow_nfe}")
 
         if return_traj:
             return torch.stack([z0, pred])

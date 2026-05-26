@@ -42,6 +42,31 @@ python scripts/sweep_num_k_infer.py \
   --output-csv results/efficiency/k_sweep_baseline_ep1500.csv
 ```
 
+### MeanFlow Training / Eval Commands
+
+Train MeanFlow:
+
+```bash
+python scripts/train.py \
+  task_name=open_fridge \
+  +experiment=pointflowmatch_meanflow
+```
+
+Validate MeanFlow checkpoint:
+
+```bash
+bash bash/run_validate_accuracy.sh <ckpt_name> 100
+```
+
+Latency benchmark for a MeanFlow checkpoint:
+
+```bash
+python scripts/benchmark_inference_latency.py \
+  --ckpt-name <ckpt_name> \
+  --ckpt-episode latest \
+  --num-k-infer 1
+```
+
 ### 2) Parameter count
 
 ```bash

@@ -293,6 +293,14 @@ def main(cfg: OmegaConf):
         phase_prediction=getattr(cfg, "phase_prediction", None),
         phase_rollout=getattr(cfg, "phase_rollout", None),
     )
+    print(f"[model] class={composer_model.__class__.__name__} target={cfg.model._target_}")
+    print(f"[model] num_k_infer={getattr(composer_model, 'num_k_infer', None)}")
+    if hasattr(composer_model, "meanflow_enabled"):
+        print(
+            f"[model] meanflow.enabled={getattr(composer_model, 'meanflow_enabled', None)} "
+            f"one_step={getattr(composer_model, 'meanflow_one_step', None)} "
+            f"interval_embed_dim={getattr(composer_model, 'interval_embed_dim', None)}"
+        )
     print("[memory] after composer_model = instantiate(cfg.model)")
     _log_gpu_memory("after model create")
 
