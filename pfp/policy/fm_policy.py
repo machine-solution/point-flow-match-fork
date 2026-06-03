@@ -1,5 +1,6 @@
 from __future__ import annotations
 import functools
+import inspect
 import logging
 import os
 import sys
@@ -52,40 +53,28 @@ def _unet_final_out_channels(unet: nn.Module) -> int | None:
     return None
 
 
-def _instantiate_diffusion_drop_legacy_output_dim(
-    diffusion_net: functools.partial | DictConfig | dict,
-    *,
-    input_dim: int,
-) -> nn.Module:
-    """
-    Vanilla diffusion_policy ConditionalUnet1D matches output width to input width when output_dim
-    is omitted. Strip any legacy ``output_dim`` from Hydra partial/config so we always get a
-    full [D+E]-channel field and slice the first D channels for velocity in FMPolicy.
-    """
-    if isinstance(diffusion_net, functools.partial):
-        kw = dict(diffusion_net.keywords)
-        kw.pop("output_dim", None)
-        kw["input_dim"] = input_dim
-        return diffusion_net.func(*diffusion_net.args, **kw)
+def _is_conditional_unet_ctor(ctor: object) -> bool:
+    mod = getattr(ctor, "__module__", "")
+    name = getattr(ctor, "__name__", "")
+    return (mod == "diffusion_policy.model.diffusion.conditional_unet1d") and (name == "ConditionalUnet1D")
 
-    if isinstance(diffusion_net, DictConfig) or isinstance(diffusion_net, dict):
-        container = OmegaConf.to_container(diffusion_net, resolve=True)
-        if isinstance(container, dict):
-            container.pop("output_dim", None)
-            # Nested configs often keep ``_partial_: true``; completing with input_dim must yield a
-            # full module, not another partial.
-            if container.get("_partial_") is True:
-                container["_partial_"] = False
-            cfg = OmegaConf.create(container)
-            return hydra.utils.instantiate(cfg, input_dim=input_dim)
 
-    raise TypeError(f"expected partial or DictConfig/dict; got {type(diffusion_net)}")
+def _signature_supports(ctor: object, key: str) -> bool:
+    try:
+        sig = inspect.signature(ctor)
+    except (TypeError, ValueError):
+        return False
+    if key in sig.parameters:
+        return True
+    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
 
 
 def instantiate_diffusion_net_for_fm(
     diffusion_net: nn.Module | functools.partial | DictConfig | dict,
     *,
     input_dim: int,
+    global_cond_dim: int,
+    output_dim: int,
 ) -> tuple[nn.Module, str]:
     """
     Build ConditionalUnet1D for FMPolicy.
@@ -101,19 +90,60 @@ def instantiate_diffusion_net_for_fm(
         return diffusion_net, "already nn.Module"
 
     if isinstance(diffusion_net, functools.partial):
-        m = _instantiate_diffusion_drop_legacy_output_dim(diffusion_net, input_dim=input_dim)
+        ctor = diffusion_net.func
+        kw = dict(diffusion_net.keywords)
+        is_unet = _is_conditional_unet_ctor(ctor)
+        if _signature_supports(ctor, "input_dim"):
+            kw["input_dim"] = input_dim
+        if _signature_supports(ctor, "global_cond_dim"):
+            kw["global_cond_dim"] = kw.get("global_cond_dim", global_cond_dim)
+        # Keep legacy UNet behavior: full-field output width follows input_dim.
+        if is_unet:
+            kw.pop("output_dim", None)
+        elif _signature_supports(ctor, "output_dim"):
+            kw["output_dim"] = kw.get("output_dim", output_dim)
+        m = ctor(*diffusion_net.args, **kw)
         if not isinstance(m, nn.Module):
             raise TypeError(f"partial did not return nn.Module: {type(m)}")
-        return m, "functools.partial(...) completed (output_dim stripped if present)"
+        return m, "functools.partial(...) completed"
 
     if isinstance(diffusion_net, DictConfig) or isinstance(diffusion_net, dict):
-        m = _instantiate_diffusion_drop_legacy_output_dim(diffusion_net, input_dim=input_dim)
+        container = OmegaConf.to_container(diffusion_net, resolve=True)
+        if not isinstance(container, dict):
+            raise TypeError("diffusion_net config must resolve to dict-like container")
+        target = container.get("_target_")
+        if not target:
+            raise ValueError("diffusion_net config missing _target_")
+        ctor = hydra.utils.get_class(target)
+        is_unet = _is_conditional_unet_ctor(ctor)
+        if is_unet:
+            container.pop("output_dim", None)
+        if container.get("_partial_") is True:
+            container["_partial_"] = False
+        cfg = OmegaConf.create(container)
+        inst_kwargs = {}
+        if _signature_supports(ctor, "input_dim"):
+            inst_kwargs["input_dim"] = input_dim
+        if _signature_supports(ctor, "global_cond_dim"):
+            inst_kwargs["global_cond_dim"] = container.get("global_cond_dim", global_cond_dim)
+        if (not is_unet) and _signature_supports(ctor, "output_dim"):
+            inst_kwargs["output_dim"] = container.get("output_dim", output_dim)
+        m = hydra.utils.instantiate(cfg, **inst_kwargs)
         if not isinstance(m, nn.Module):
             raise TypeError(f"instantiated diffusion_net is not nn.Module: {type(m)}")
-        return m, "hydra.utils.instantiate(DictConfig|dict, output_dim stripped if present)"
+        return m, "hydra.utils.instantiate(DictConfig|dict)"
 
     if callable(diffusion_net):
-        m = diffusion_net(input_dim=input_dim)
+        ctor = diffusion_net
+        is_unet = _is_conditional_unet_ctor(ctor)
+        call_kwargs = {}
+        if _signature_supports(ctor, "input_dim"):
+            call_kwargs["input_dim"] = input_dim
+        if _signature_supports(ctor, "global_cond_dim"):
+            call_kwargs["global_cond_dim"] = global_cond_dim
+        if (not is_unet) and _signature_supports(ctor, "output_dim"):
+            call_kwargs["output_dim"] = output_dim
+        m = diffusion_net(**call_kwargs)
         if not isinstance(m, nn.Module):
             raise TypeError(f"callable did not return nn.Module: {type(m)}")
         return m, "callable constructor"
@@ -306,12 +336,17 @@ class FMPolicy(ComposerModel, BasePolicy):
         if self.phase_enabled:
             effective_input_dim += int(self.phase_cfg.phase_embed_dim)
 
+        effective_global_cond_dim = int(self.x_dim) * int(self.n_obs_steps)
+        effective_output_dim = int(y_dim)
         self.diffusion_net, ctor_src = instantiate_diffusion_net_for_fm(
             diffusion_net,
             input_dim=effective_input_dim,
+            global_cond_dim=effective_global_cond_dim,
+            output_dim=effective_output_dim,
         )
         self._diffusion_net_ctor_source = ctor_src
         self.diffusion_net_input_dim = effective_input_dim
+        self.diffusion_net_output_dim = effective_output_dim
 
         assert isinstance(self.diffusion_net, nn.Module), "diffusion_net must be nn.Module after init"
         stem_in = _unet_stem_in_channels(self.diffusion_net)
@@ -331,7 +366,7 @@ class FMPolicy(ComposerModel, BasePolicy):
             f"  phase_conditioning.enabled={self.phase_enabled}  "
             f"phase_prediction.enabled={self.phase_pred_enabled}  y_dim={y_dim}  "
             f"phase_embed_dim={int(self.phase_cfg.phase_embed_dim) if self.phase_enabled else 0}\n"
-            f"  UNet full field width (in/out)={effective_input_dim}  "
+            f"  model input_width={effective_input_dim} expected_action_width={int(y_dim)}  "
             f"action velocity uses first {int(y_dim)} channels only",
             file=sys.stderr,
         )
@@ -375,15 +410,15 @@ class FMPolicy(ComposerModel, BasePolicy):
 
     def _slice_velocity(self, vel_full: torch.Tensor) -> torch.Tensor:
         """
-        Vanilla ConditionalUnet1D outputs the same channel width as ``input_dim`` (D or D+E).
         Only the first D channels are physical action velocity; any extra channels are discarded.
+        This supports both:
+        - full-field backbones (output width == input width), e.g. ConditionalUnet1D
+        - direct-width backbones (output width == y_dim), e.g. TemporalTransformerBackbone
         """
         D = int(self.y_dim)
-        io = int(self.diffusion_net_input_dim)
-        assert vel_full.shape[-1] == io, (
-            f"UNet output width {vel_full.shape[-1]} != diffusion_net_input_dim={io}"
+        assert vel_full.shape[-1] >= D, (
+            f"Backbone output width {vel_full.shape[-1]} must be >= action width y_dim={D}"
         )
-        assert vel_full.shape[-1] >= D
         vel = vel_full[..., :D]
         assert vel.shape[-1] == D
         return vel

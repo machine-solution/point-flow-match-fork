@@ -1,0 +1,10 @@
+_target_: pfp.models.temporal_transformer.TemporalTransformerBackbone
+_partial_: true
+
+d_model: 128
+num_layers: 2
+num_heads: 4
+mlp_ratio: 2.0
+dropout: 0.0
+max_horizon: ${n_pred_steps}
+use_layer_norm: true

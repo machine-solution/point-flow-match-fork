@@ -204,6 +204,23 @@ conda activate ./pfp-train-env
 sbatch dexter/run_pointflowmatch_open_fridge_meanflow.sbatch
 ```
 
+**MeanFlow + Temporal Transformer (архитектурный эксперимент, готовые команды):**
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+conda activate ./pfp-train-env
+
+# train
+TASK_NAME=open_fridge \
+RUN_NAME=meanflow_transformer_open_fridge \
+bash bash/dexter_train_meanflow_transformer.sh
+
+# validate (подставь фактический run_name из логов/ckpt)
+CKPT_NAME=<meanflow_transformer_run_name> \
+NUM_EPISODES=100 \
+bash bash/dexter_validate_meanflow_transformer.sh
+```
+
 **Двухфазное обучение (pre, затем post)** — из корня репозитория, окружение `pfp-train-env` уже используется внутри `.sbatch` (как в `run_pointflowmatch_open_fridge.sbatch`):
 
 ```bash

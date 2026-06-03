@@ -39,18 +39,29 @@ class MeanFlowPolicy(FMPolicy):
             nn.ReLU(),
             nn.Linear(self.interval_hidden_dim, self.interval_embed_dim),
         )
+        total_trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        diffusion_trainable = sum(p.numel() for p in self.diffusion_net.parameters() if p.requires_grad)
+        obs_encoder_trainable = sum(p.numel() for p in self.obs_encoder.parameters() if p.requires_grad)
         # MeanFlow is designed as one-step. Keep API-compatible setter but pin NFE to 1.
         self.num_k_infer = 1
         logger.info(
-            "[MeanFlow] enabled=%s one_step=%s num_k_infer=%d interval_embed_dim=%d",
+            "[MeanFlow] enabled=%s one_step=%s num_k_infer=%d interval_embed_dim=%d "
+            "params_trainable(total=%d diffusion=%d obs_encoder=%d)",
             self.meanflow_enabled,
             self.meanflow_one_step,
             self.num_k_infer,
             self.interval_embed_dim,
+            total_trainable,
+            diffusion_trainable,
+            obs_encoder_trainable,
         )
         print(
             f"[MeanFlow] enabled={self.meanflow_enabled} one_step={self.meanflow_one_step} "
             f"num_k_infer={self.num_k_infer} interval_embed_dim={self.interval_embed_dim}"
+        )
+        print(
+            "[MeanFlow] params_trainable: "
+            f"total={total_trainable} diffusion={diffusion_trainable} obs_encoder={obs_encoder_trainable}"
         )
 
     def set_num_k_infer(self, num_k_infer: int):
