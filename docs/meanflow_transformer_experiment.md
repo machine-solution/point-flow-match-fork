@@ -50,18 +50,8 @@ Core structure:
 
 ## Dexter Commands (Only)
 
-Train:
+Main run:
 
 ```bash
-TASK_NAME=open_fridge \
-RUN_NAME=meanflow_transformer_open_fridge \
-bash bash/dexter_train_meanflow_transformer.sh
-```
-
-Validate:
-
-```bash
-CKPT_NAME=<meanflow_transformer_run_name> \
-NUM_EPISODES=100 \
-bash bash/dexter_validate_meanflow_transformer.sh
+sbatch dexter/run_pointflowmatch_open_fridge_meanflow_transformer.sbatch
 ```
