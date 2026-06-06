@@ -77,9 +77,7 @@ Compare:
 Train:
 
 ```bash
-TASK_NAME=open_fridge \
-RUN_NAME=shortcut_open_fridge \
-bash bash/dexter_train_shortcut_flow.sh
+sbatch dexter/run_pointflowmatch_open_fridge_shortcut.sbatch
 ```
 
 Validate:

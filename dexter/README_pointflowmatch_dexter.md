@@ -213,6 +213,15 @@ conda activate ./pfp-train-env
 sbatch dexter/run_pointflowmatch_open_fridge_meanflow_transformer.sbatch
 ```
 
+**Shortcut Flow (архитектурный эксперимент, готовый sbatch):**
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+conda activate ./pfp-train-env
+
+sbatch dexter/run_pointflowmatch_open_fridge_shortcut.sbatch
+```
+
 **Двухфазное обучение (pre, затем post)** — из корня репозитория, окружение `pfp-train-env` уже используется внутри `.sbatch` (как в `run_pointflowmatch_open_fridge.sbatch`):
 
 ```bash
