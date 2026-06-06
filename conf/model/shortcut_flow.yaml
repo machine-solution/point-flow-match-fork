@@ -27,6 +27,7 @@ shortcut:
   step_sampling: powers_of_two
   min_step: null
   max_step: 0.5
+  include_half_step: true
 
 diffusion_net:
   _partial_: true

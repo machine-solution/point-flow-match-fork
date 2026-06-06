@@ -24,6 +24,7 @@ class ShortcutConfig:
     step_sampling: str = "powers_of_two"
     min_step: float | None = None
     max_step: float = 0.5
+    include_half_step: bool = True
     include_one_step_target: bool = True
     one_step_loss_weight: float = 1.0
 
@@ -46,6 +47,7 @@ class ShortcutFMPolicy(FMPolicy):
             step_sampling=str(cfg.get("step_sampling", "powers_of_two")),
             min_step=(None if cfg.get("min_step", None) is None else float(cfg.get("min_step"))),
             max_step=float(cfg.get("max_step", 0.5)),
+            include_half_step=bool(cfg.get("include_half_step", True)),
             include_one_step_target=bool(cfg.get("include_one_step_target", True)),
             one_step_loss_weight=float(cfg.get("one_step_loss_weight", 1.0)),
         )
@@ -73,6 +75,7 @@ class ShortcutFMPolicy(FMPolicy):
             f"num_base_steps={self.shortcut_cfg.num_base_steps} "
             f"base_w={self.shortcut_cfg.base_loss_weight} cons_w={self.shortcut_cfg.consistency_loss_weight} "
             f"one_step_w={self.shortcut_cfg.one_step_loss_weight} "
+            f"include_half_step={self.shortcut_cfg.include_half_step} "
             f"include_one_step_target={self.shortcut_cfg.include_one_step_target} "
             f"stopgrad_target={self.shortcut_cfg.stopgrad_target}"
         )
@@ -95,20 +98,22 @@ class ShortcutFMPolicy(FMPolicy):
         min_step = self.shortcut_cfg.min_step
         while d <= 0.5 + 1e-12:
             if d <= max_step + 1e-12 and (min_step is None or d >= min_step - 1e-12):
-                # consistency branch needs t + 2d <= 1.
-                if 2.0 * d <= 1.0 + 1e-12:
-                    levels.append(d)
+                levels.append(d)
             d *= 2.0
-        # Critical: always include d=0.5 so consistency directly supervises big_step=1.0.
-        if 0.5 not in levels:
+        # Critical: include d=0.5 so consistency directly supervises big_step=1.0.
+        if self.shortcut_cfg.include_half_step:
             levels.append(0.5)
         if not levels:
             base = 1.0 / k
-            if 2.0 * base <= 1.0 + 1e-12:
-                levels = [base]
-            else:
-                raise ValueError("No valid shortcut d levels satisfy constraints.")
-        levels = sorted(set(levels))
+            levels = [base]
+        eps = 1e-12
+        levels = [x for x in sorted(set(levels)) if x > 0.0 and (2.0 * x <= 1.0 + eps)]
+        if self.shortcut_cfg.include_half_step:
+            has_half = any(abs(x - 0.5) < 1e-6 for x in levels)
+            assert has_half, "include_half_step=true requires d=0.5 in sampled levels"
+        if not levels:
+            raise ValueError("No valid shortcut d levels satisfy constraints after filtering.")
+        logger.info("[ShortcutFlow] sampled shortcut levels=%s", levels)
         return torch.tensor(levels, device=device, dtype=torch.float32)
 
     def sample_shortcut_d_and_t(self, batch_size: int, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -209,12 +214,16 @@ class ShortcutFMPolicy(FMPolicy):
             "shortcut/d_mean": float(d_sc.mean().item()),
             "shortcut/t_mean": float(t_sc.mean().item()),
             "shortcut/max_sampled_d": float(d_sc.max().item()),
-            "shortcut/contains_d_half": 1.0 if contains_half else 0.0,
+            "shortcut/contains_half_step": 1.0 if contains_half else 0.0,
+            "shortcut/include_one_step_target": 1.0 if self.shortcut_cfg.include_one_step_target else 0.0,
             "shortcut/num_base_steps": float(self.shortcut_cfg.num_base_steps),
         }
         return loss_base_xyz, loss_base_rot6d, loss_base_grip, loss_sc, loss_one_step, stats
 
     def loss(self, outputs, batch: tuple[torch.Tensor, ...]) -> torch.Tensor:
+        assert any(p.requires_grad for p in self.diffusion_net.parameters()), (
+            "Shortcut diffusion_net parameters must require gradients"
+        )
         with torch.no_grad():
             batch = self._norm_data(batch)
             if self.augment_data:
@@ -233,13 +242,14 @@ class ShortcutFMPolicy(FMPolicy):
             + self.shortcut_cfg.consistency_loss_weight * loss_sc
             + self.shortcut_cfg.one_step_loss_weight * loss_one_step
         )
+        assert total.requires_grad, "Shortcut total_loss must require gradients"
         self.logger.log_metrics(
             {
-                "loss/base_5p": float(base_5p.item()),
-                "loss/base_grip": float(base_grip_w.item()),
-                "loss/shortcut_consistency": float(loss_sc.item()),
-                "loss/shortcut_one_step": float(loss_one_step.item()),
-                "loss/total": float(total.item()),
+                "loss/train/base_5p": float(base_5p.item()),
+                "loss/train/base_grip": float(base_grip_w.item()),
+                "loss/train/shortcut_consistency": float(loss_sc.item()),
+                "loss/train/shortcut_one_step": float(loss_one_step.item()),
+                "loss/train/total": float(total.item()),
                 **sc_stats,
             }
         )
@@ -270,7 +280,7 @@ class ShortcutFMPolicy(FMPolicy):
                 "shortcut/eval_d_mean": sc_stats["shortcut/d_mean"],
                 "shortcut/eval_t_mean": sc_stats["shortcut/t_mean"],
                 "shortcut/eval_max_sampled_d": sc_stats["shortcut/max_sampled_d"],
-                "shortcut/eval_contains_d_half": sc_stats["shortcut/contains_d_half"],
+                "shortcut/eval_contains_half_step": sc_stats["shortcut/contains_half_step"],
             }
         )
         infer_phase = None if self.phase_pred_enabled else phase_pred

@@ -28,7 +28,7 @@ Where:
 - `L_sc`: self-consistency loss enforcing:
   - one big step (`2d`) is close to
   - two small steps (`d` then `d`)
-  - step levels include `d=0.5`, so consistency directly supervises big step `2d=1.0`
+  - step levels include mandatory `d=0.5`, so consistency directly supervises big step `2d=1.0`
 
 Implemented consistency relation:
 
@@ -47,7 +47,7 @@ Supports both:
 - `K=1`: one-step inference (`NFE=1`)
 - `K>1`: iterative shortcut updates (`NFE=K`)
 
-`last_infer_nfe` is tracked accordingly.
+`last_infer_nfe` is tracked accordingly. This experiment explicitly targets the deployed one-step regime (`num_k_infer=1`).
 
 ## What Stays the Same
 
