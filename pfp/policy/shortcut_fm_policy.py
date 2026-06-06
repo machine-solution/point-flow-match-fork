@@ -24,6 +24,8 @@ class ShortcutConfig:
     step_sampling: str = "powers_of_two"
     min_step: float | None = None
     max_step: float = 0.5
+    include_one_step_target: bool = True
+    one_step_loss_weight: float = 1.0
 
 
 class ShortcutFMPolicy(FMPolicy):
@@ -44,6 +46,8 @@ class ShortcutFMPolicy(FMPolicy):
             step_sampling=str(cfg.get("step_sampling", "powers_of_two")),
             min_step=(None if cfg.get("min_step", None) is None else float(cfg.get("min_step"))),
             max_step=float(cfg.get("max_step", 0.5)),
+            include_one_step_target=bool(cfg.get("include_one_step_target", True)),
+            one_step_loss_weight=float(cfg.get("one_step_loss_weight", 1.0)),
         )
         if self.shortcut_cfg.num_base_steps <= 0:
             raise ValueError("shortcut.num_base_steps must be > 0")
@@ -54,17 +58,22 @@ class ShortcutFMPolicy(FMPolicy):
             nn.Linear(self.shortcut_cfg.embed_dim, self.shortcut_cfg.embed_dim),
         )
         logger.info(
-            "[ShortcutFlow] embed_dim=%d num_base_steps=%d base_w=%.3f cons_w=%.3f stopgrad=%s",
+            "[ShortcutFlow] embed_dim=%d num_base_steps=%d base_w=%.3f cons_w=%.3f "
+            "one_step_w=%.3f include_one_step=%s stopgrad=%s",
             self.shortcut_cfg.embed_dim,
             self.shortcut_cfg.num_base_steps,
             self.shortcut_cfg.base_loss_weight,
             self.shortcut_cfg.consistency_loss_weight,
+            self.shortcut_cfg.one_step_loss_weight,
+            self.shortcut_cfg.include_one_step_target,
             self.shortcut_cfg.stopgrad_target,
         )
         print(
             f"[ShortcutFlow] embed_dim={self.shortcut_cfg.embed_dim} "
             f"num_base_steps={self.shortcut_cfg.num_base_steps} "
             f"base_w={self.shortcut_cfg.base_loss_weight} cons_w={self.shortcut_cfg.consistency_loss_weight} "
+            f"one_step_w={self.shortcut_cfg.one_step_loss_weight} "
+            f"include_one_step_target={self.shortcut_cfg.include_one_step_target} "
             f"stopgrad_target={self.shortcut_cfg.stopgrad_target}"
         )
 
@@ -90,12 +99,16 @@ class ShortcutFMPolicy(FMPolicy):
                 if 2.0 * d <= 1.0 + 1e-12:
                     levels.append(d)
             d *= 2.0
+        # Critical: always include d=0.5 so consistency directly supervises big_step=1.0.
+        if 0.5 not in levels:
+            levels.append(0.5)
         if not levels:
             base = 1.0 / k
             if 2.0 * base <= 1.0 + 1e-12:
                 levels = [base]
             else:
                 raise ValueError("No valid shortcut d levels satisfy constraints.")
+        levels = sorted(set(levels))
         return torch.tensor(levels, device=device, dtype=torch.float32)
 
     def sample_shortcut_d_and_t(self, batch_size: int, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -134,7 +147,7 @@ class ShortcutFMPolicy(FMPolicy):
         robot_state_pred: torch.Tensor,
         *,
         phase: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, float]]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, float]]:
         nx = self.encode_obs(pcd, robot_state_obs)
         ny = robot_state_pred
         b, t_h, _ = ny.shape
@@ -173,12 +186,33 @@ class ShortcutFMPolicy(FMPolicy):
 
         x_two_target = x_two.detach() if self.shortcut_cfg.stopgrad_target else x_two
         loss_sc = F.mse_loss(x_big, x_two_target)
+        loss_one_step = torch.zeros((), device=DEVICE, dtype=x_big.dtype)
+        if self.shortcut_cfg.include_one_step_target:
+            d_full = torch.ones((b, 1, 1), device=DEVICE)
+            t_zero = torch.zeros((b, 1, 1), device=DEVICE)
+            x0 = z0
+            v_full = self._forward_shortcut(x0, t_zero, d_full, nx, phase_flow=phase_flow)
+            x_full = x0 + v_full
+
+            d_half = torch.full((b, 1, 1), 0.5, device=DEVICE)
+            t_half0 = torch.zeros((b, 1, 1), device=DEVICE)
+            v_h1 = self._forward_shortcut(x0, t_half0, d_half, nx, phase_flow=phase_flow)
+            x_half = x0 + d_half * v_h1
+            t_half1 = torch.full((b, 1, 1), 0.5, device=DEVICE)
+            v_h2 = self._forward_shortcut(x_half, t_half1, d_half, nx, phase_flow=phase_flow)
+            x_half_half = x_half + d_half * v_h2
+            x_half_half_target = x_half_half.detach() if self.shortcut_cfg.stopgrad_target else x_half_half
+            loss_one_step = F.mse_loss(x_full, x_half_half_target)
+
+        contains_half = bool(torch.any(torch.isclose(d_sc.view(-1), torch.tensor(0.5, device=DEVICE))).item())
         stats = {
             "shortcut/d_mean": float(d_sc.mean().item()),
             "shortcut/t_mean": float(t_sc.mean().item()),
+            "shortcut/max_sampled_d": float(d_sc.max().item()),
+            "shortcut/contains_d_half": 1.0 if contains_half else 0.0,
             "shortcut/num_base_steps": float(self.shortcut_cfg.num_base_steps),
         }
-        return loss_base_xyz, loss_base_rot6d, loss_base_grip, loss_sc, stats
+        return loss_base_xyz, loss_base_rot6d, loss_base_grip, loss_sc, loss_one_step, stats
 
     def loss(self, outputs, batch: tuple[torch.Tensor, ...]) -> torch.Tensor:
         with torch.no_grad():
@@ -187,19 +221,24 @@ class ShortcutFMPolicy(FMPolicy):
                 batch = self._augment_data(batch)
         pcd, robot_state_obs, robot_state_pred = batch[:3]
         phase_pred = batch[3] if (self.phase_enabled and len(batch) >= 4) else None
-        base_xyz, base_rot6d, base_grip, loss_sc, sc_stats = self._compute_shortcut_losses(
+        base_xyz, base_rot6d, base_grip, loss_sc, loss_one_step, sc_stats = self._compute_shortcut_losses(
             pcd, robot_state_obs, robot_state_pred, phase=phase_pred
         )
 
         base_5p = self.l_w["xyz"] * base_xyz + self.l_w["rot6d"] * base_rot6d
         base_grip_w = self.l_w["grip"] * base_grip
         l_base = base_5p + base_grip_w
-        total = self.shortcut_cfg.base_loss_weight * l_base + self.shortcut_cfg.consistency_loss_weight * loss_sc
+        total = (
+            self.shortcut_cfg.base_loss_weight * l_base
+            + self.shortcut_cfg.consistency_loss_weight * loss_sc
+            + self.shortcut_cfg.one_step_loss_weight * loss_one_step
+        )
         self.logger.log_metrics(
             {
                 "loss/base_5p": float(base_5p.item()),
                 "loss/base_grip": float(base_grip_w.item()),
                 "loss/shortcut_consistency": float(loss_sc.item()),
+                "loss/shortcut_one_step": float(loss_one_step.item()),
                 "loss/total": float(total.item()),
                 **sc_stats,
             }
@@ -210,21 +249,28 @@ class ShortcutFMPolicy(FMPolicy):
         batch = self._norm_data(batch)
         pcd, robot_state_obs, robot_state_pred = batch[:3]
         phase_pred = batch[3] if (self.phase_enabled and len(batch) >= 4) else None
-        base_xyz, base_rot6d, base_grip, loss_sc, sc_stats = self._compute_shortcut_losses(
+        base_xyz, base_rot6d, base_grip, loss_sc, loss_one_step, sc_stats = self._compute_shortcut_losses(
             pcd, robot_state_obs, robot_state_pred, phase=phase_pred
         )
         base_5p = self.l_w["xyz"] * base_xyz + self.l_w["rot6d"] * base_rot6d
         base_grip_w = self.l_w["grip"] * base_grip
         l_base = base_5p + base_grip_w
-        total = self.shortcut_cfg.base_loss_weight * l_base + self.shortcut_cfg.consistency_loss_weight * loss_sc
+        total = (
+            self.shortcut_cfg.base_loss_weight * l_base
+            + self.shortcut_cfg.consistency_loss_weight * loss_sc
+            + self.shortcut_cfg.one_step_loss_weight * loss_one_step
+        )
         self.logger.log_metrics(
             {
                 "loss/eval/base_5p": float(base_5p.item()),
                 "loss/eval/base_grip": float(base_grip_w.item()),
                 "loss/eval/shortcut_consistency": float(loss_sc.item()),
+                "loss/eval/shortcut_one_step": float(loss_one_step.item()),
                 "loss/eval/total": float(total.item()),
                 "shortcut/eval_d_mean": sc_stats["shortcut/d_mean"],
                 "shortcut/eval_t_mean": sc_stats["shortcut/t_mean"],
+                "shortcut/eval_max_sampled_d": sc_stats["shortcut/max_sampled_d"],
+                "shortcut/eval_contains_d_half": sc_stats["shortcut/contains_d_half"],
             }
         )
         infer_phase = None if self.phase_pred_enabled else phase_pred

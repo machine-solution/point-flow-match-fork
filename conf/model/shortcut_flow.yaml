@@ -22,6 +22,8 @@ shortcut:
   base_loss_weight: 1.0
   consistency_loss_weight: 1.0
   stopgrad_target: true
+  include_one_step_target: true
+  one_step_loss_weight: 1.0
   step_sampling: powers_of_two
   min_step: null
   max_step: 0.5

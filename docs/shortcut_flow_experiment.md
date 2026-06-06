@@ -28,12 +28,17 @@ Where:
 - `L_sc`: self-consistency loss enforcing:
   - one big step (`2d`) is close to
   - two small steps (`d` then `d`)
+  - step levels include `d=0.5`, so consistency directly supervises big step `2d=1.0`
 
 Implemented consistency relation:
 
 - `x_big = x_t + 2d * s_theta(x_t, t, 2d, obs)`
 - `x_two = x_t + d * s_theta(x_t, t, d, obs)` then one more step from `x_mid`
 - `L_sc = MSE(x_big, stopgrad(x_two))` (configurable with `stopgrad_target`)
+- optional direct one-step branch:
+  - `x_full` from `d=1.0, t=0`
+  - target from two `d=0.5` steps
+  - weighted by `shortcut.one_step_loss_weight` when `shortcut.include_one_step_target=true`
 
 ## Inference Behavior
 
