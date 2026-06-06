@@ -191,23 +191,26 @@ class ShortcutFMPolicy(FMPolicy):
 
         x_two_target = x_two.detach() if self.shortcut_cfg.stopgrad_target else x_two
         loss_sc = F.mse_loss(x_big, x_two_target)
+        one_step_anchor_t_mean = 0.0
         loss_one_step = torch.zeros((), device=DEVICE, dtype=x_big.dtype)
         if self.shortcut_cfg.include_one_step_target:
+            # One-step consistency is anchored on interpolation states, not only pure noise.
+            # t_anchor is sampled in [0, 0.5] so (t_anchor + 0.5) stays in [0, 1].
+            t_anchor = torch.rand((b, 1, 1), device=DEVICE) * 0.5
+            x_anchor = (1.0 - t_anchor) * z0 + t_anchor * z1
             d_full = torch.ones((b, 1, 1), device=DEVICE)
-            t_zero = torch.zeros((b, 1, 1), device=DEVICE)
-            x0 = z0
-            v_full = self._forward_shortcut(x0, t_zero, d_full, nx, phase_flow=phase_flow)
-            x_full = x0 + v_full
+            v_full = self._forward_shortcut(x_anchor, t_anchor, d_full, nx, phase_flow=phase_flow)
+            x_full = x_anchor + d_full * v_full
 
             d_half = torch.full((b, 1, 1), 0.5, device=DEVICE)
-            t_half0 = torch.zeros((b, 1, 1), device=DEVICE)
-            v_h1 = self._forward_shortcut(x0, t_half0, d_half, nx, phase_flow=phase_flow)
-            x_half = x0 + d_half * v_h1
-            t_half1 = torch.full((b, 1, 1), 0.5, device=DEVICE)
+            v_h1 = self._forward_shortcut(x_anchor, t_anchor, d_half, nx, phase_flow=phase_flow)
+            x_half = x_anchor + d_half * v_h1
+            t_half1 = t_anchor + 0.5
             v_h2 = self._forward_shortcut(x_half, t_half1, d_half, nx, phase_flow=phase_flow)
             x_half_half = x_half + d_half * v_h2
             x_half_half_target = x_half_half.detach() if self.shortcut_cfg.stopgrad_target else x_half_half
             loss_one_step = F.mse_loss(x_full, x_half_half_target)
+            one_step_anchor_t_mean = float(t_anchor.mean().item())
 
         contains_half = bool(torch.any(torch.isclose(d_sc.view(-1), torch.tensor(0.5, device=DEVICE))).item())
         stats = {
@@ -216,6 +219,7 @@ class ShortcutFMPolicy(FMPolicy):
             "shortcut/max_sampled_d": float(d_sc.max().item()),
             "shortcut/contains_half_step": 1.0 if contains_half else 0.0,
             "shortcut/include_one_step_target": 1.0 if self.shortcut_cfg.include_one_step_target else 0.0,
+            "shortcut/one_step_anchor_t_mean": one_step_anchor_t_mean,
             "shortcut/num_base_steps": float(self.shortcut_cfg.num_base_steps),
         }
         return loss_base_xyz, loss_base_rot6d, loss_base_grip, loss_sc, loss_one_step, stats
@@ -336,7 +340,7 @@ class ShortcutFMPolicy(FMPolicy):
             d = torch.ones((b, 1, 1), device=DEVICE)
             t = torch.zeros((b, 1, 1), device=DEVICE)
             v = self._forward_shortcut(z, t, d, nx, phase_flow=phase_seq)
-            z = z + v
+            z = z + d * v
             traj.append(z)
         else:
             d = torch.full((b, 1, 1), 1.0 / float(k), device=DEVICE)

@@ -36,8 +36,13 @@ Implemented consistency relation:
 - `x_two = x_t + d * s_theta(x_t, t, d, obs)` then one more step from `x_mid`
 - `L_sc = MSE(x_big, stopgrad(x_two))` (configurable with `stopgrad_target`)
 - optional direct one-step branch:
-  - `x_full` from `d=1.0, t=0`
-  - target from two `d=0.5` steps
+  - sample anchor time `t_anchor ~ Uniform(0, 0.5)`
+  - build anchor state on interpolation path:
+    - `x_anchor = (1 - t_anchor) * z0 + t_anchor * z1`
+  - predict one full step from anchor:
+    - `x_full` from `d=1.0` at `t=t_anchor`
+  - target from two half steps from same anchor:
+    - `d=0.5` at `t=t_anchor` and `t=t_anchor+0.5`
   - weighted by `shortcut.one_step_loss_weight` when `shortcut.include_one_step_target=true`
 
 ## Inference Behavior
