@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - override /model: step_conditioned_meanflow
+  - override /checkpoint_schedule: final_1500_only
+  - override /phase_conditioning: disabled
+  - override /phase_prediction: disabled
+  - override /phase_rollout: disabled
+
+# Save only final checkpoint (ep1500) for this experiment.
+save_each_n_epochs: 1500
+save_num_checkpoints_to_keep: 1
+checkpoint_milestones: []
+epochs: 1500

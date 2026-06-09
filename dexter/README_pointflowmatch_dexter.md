@@ -222,6 +222,19 @@ conda activate ./pfp-train-env
 sbatch dexter/run_pointflowmatch_open_fridge_shortcut.sbatch
 ```
 
+**StepConditionedMeanFlow (новая unified-модель, готовый sbatch):**
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+conda activate ./pfp-train-env
+
+sbatch dexter/run_pointflowmatch_open_fridge_step_conditioned_meanflow.sbatch
+```
+
+Для этого режима в `+experiment=pointflowmatch_step_conditioned_meanflow` включен
+`checkpoint_schedule=final_1500_only`: сохраняется только финальный чекпоинт `ep1500`
+(без промежуточных `ep300/600/900/1200`).
+
 **Двухфазное обучение (pre, затем post)** — из корня репозитория, окружение `pfp-train-env` уже используется внутри `.sbatch` (как в `run_pointflowmatch_open_fridge.sbatch`):
 
 ```bash
@@ -430,8 +443,12 @@ bash bash/run_validate_milestone_sweep.sh <run_name> 100 \
 | Oracle phase (GT в датасете) | `run_pointflowmatch_open_fridge_phase_conditioned.sbatch` | `phase_conditioning=enabled`, `phase_prediction=disabled` |
 | **Learned phase (эта модель)** | `run_pointflowmatch_open_fridge_phase_prediction.sbatch` | `phase_conditioning=enabled`, `phase_prediction=enabled` |
 | Learned phase + gripper weights | `run_pointflowmatch_open_fridge_gripper_weighted_phase_prediction.sbatch` | `+experiment=pointflowmatch_gripper_weighted` + phase flags |
+| StepConditionedMeanFlow | `run_pointflowmatch_open_fridge_step_conditioned_meanflow.sbatch` | `+experiment=pointflowmatch_step_conditioned_meanflow` |
 
-Все варианты в первой колонке используют **`conf/model/flow.yaml`** → **`pfp.policy.fm_policy.FMPolicy`**, не двухфазные отдельные политики.
+Строки `Baseline/Oracle/Learned phase/Learned phase + gripper weights` используют
+**`conf/model/flow.yaml`** → **`pfp.policy.fm_policy.FMPolicy`**.
+`StepConditionedMeanFlow` использует отдельные
+**`conf/model/step_conditioned_meanflow.yaml`** → **`pfp.policy.step_conditioned_meanflow_policy.StepConditionedMeanFlowPolicy`**.
 
 Перед длинным job скрипт `dexter/verify_training_setup.py` проверяет, что Hydra собирает именно `FMPolicy` и что `phase_head` создаётся при `phase_prediction=enabled`.
 

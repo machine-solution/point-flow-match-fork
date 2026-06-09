@@ -1,0 +1,50 @@
+_target_: pfp.policy.step_conditioned_meanflow_policy.StepConditionedMeanFlowPolicy
+x_dim: ${x_dim}
+y_dim: ${y_dim}
+n_obs_steps: ${n_obs_steps}
+n_pred_steps: ${n_pred_steps}
+num_k_infer: 1
+num_inference_steps: 1
+time_conditioning: True
+norm_pcd_center: [0.4, 0.0, 1.4]
+augment_data: False
+noise_type: gaussian
+noise_scale: 1.0
+loss_type: l2
+flow_schedule: exp
+exp_scale: 4.0
+snr_sampler: uniform
+
+obs_encoder: ${backbone}
+
+step_conditioned_meanflow:
+  embed_dim: 128
+  hidden_dim: 256
+  train_delta_steps: [1, 2, 4, 8, 16]
+  use_consistency_loss: true
+  lambda_consistency: 0.1
+  stopgrad_target: true
+
+diffusion_net:
+  _partial_: true
+  _target_: diffusion_policy.model.diffusion.conditional_unet1d.ConditionalUnet1D
+  global_cond_dim: "${eval: '${x_dim} * ${n_obs_steps} + ${model.step_conditioned_meanflow.embed_dim}'}"
+  diffusion_step_embed_dim: "${eval: '256 if ${model.time_conditioning} else 0'}"
+  down_dims: [256, 512, 1024]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: True
+  use_dropout: False
+
+loss_weights:
+  xyz: 10.0
+  rot6d: 10.0
+  grip: 1.0
+
+use_gripper_motion_weights: false
+gripper_motion_lambda: 3.0
+gripper_motion_window: 1
+
+phase_conditioning: ${phase_conditioning}
+phase_prediction: ${phase_prediction}
+phase_rollout: ${phase_rollout}

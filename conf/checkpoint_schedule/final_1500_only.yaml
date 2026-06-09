@@ -1,0 +1,6 @@
+# @package _global_
+# Save only the final checkpoint at epoch 1500.
+save_each_n_epochs: 1500
+save_num_checkpoints_to_keep: 1
+checkpoint_milestones: []
+epochs: 1500
