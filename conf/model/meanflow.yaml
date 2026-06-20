@@ -21,6 +21,7 @@ interval_hidden_dim: 128
 meanflow:
   enabled: true
   one_step: true
+  multistep_infer: false
 
 diffusion_net:
   _partial_: true

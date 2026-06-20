@@ -17,6 +17,7 @@ from pfp.policy.base_policy import BasePolicy
 from pfp import DEVICE, REPO_DIRS
 from pfp.common.se3_utils import init_random_traj_th
 from pfp.common.fm_utils import get_timesteps
+from pfp.common.inference_profiling import blank_infer_y_profile, cuda_sync
 from pfp.data.dataset_pcd import augment_pcd_data
 from pfp.common.phase_utils import (
     PhaseConditioningConfig,
@@ -556,9 +557,7 @@ class FMPolicy(ComposerModel, BasePolicy):
         super().reset_obs()
 
     def predict_action(self, obs: np.ndarray, robot_state: np.ndarray):
-        self.update_obs_lists(obs, robot_state)
-        obs_stacked, robot_state_stacked = self.sample_stacked_obs()
-        action = self.infer_from_np(obs_stacked, robot_state_stacked)
+        action = super().predict_action(obs, robot_state)
         if self.phase_pred_enabled and self._phase_pred_cfg.debug_log and self._last_infer_phase_log:
             lg = self._last_infer_phase_log
             try:
@@ -891,13 +890,26 @@ class FMPolicy(ComposerModel, BasePolicy):
     ) -> torch.Tensor:
         infer_t0 = time.perf_counter()
         nfe_this_call = 0
-        nx = self.encode_obs(pcd, robot_state_obs)
+        yprof = blank_infer_y_profile() if self.profile_inference else None
+
+        if yprof is not None:
+            cuda_sync()
+            t0 = time.perf_counter()
+            nx = self.encode_obs(pcd, robot_state_obs)
+            cuda_sync()
+            yprof["encode_obs_ms"] += (time.perf_counter() - t0) * 1000.0
+        else:
+            nx = self.encode_obs(pcd, robot_state_obs)
+
         B = nx.shape[0]
         z = self._init_noise(B) if noise is None else noise
         traj = [z]
         phase_seq = None
         g_last_norm: torch.Tensor | None = None
         g_last_raw: torch.Tensor | None = None
+        if yprof is not None:
+            cuda_sync()
+            t_phase0 = time.perf_counter()
         if self.phase_enabled:
             if phase is None:
                 g_last_norm = robot_state_obs[:, -1, 9]
@@ -1005,9 +1017,24 @@ class FMPolicy(ComposerModel, BasePolicy):
                         int(bad_first.sum().item()),
                         int(B),
                     )
+        if yprof is not None:
+            cuda_sync()
+            yprof["other_loop_ms"] += (time.perf_counter() - t_phase0) * 1000.0
+
         D = int(self.y_dim)
         E = int(self.phase_cfg.phase_embed_dim) if self.phase_enabled else 0
-        t0, dt = get_timesteps(self.flow_schedule, self.num_k_infer, exp_scale=self.exp_scale)
+        if yprof is not None:
+            cuda_sync()
+            t_sched0 = time.perf_counter()
+            t0, dt = get_timesteps(self.flow_schedule, self.num_k_infer, exp_scale=self.exp_scale)
+            cuda_sync()
+            yprof["scheduler_ms"] += (time.perf_counter() - t_sched0) * 1000.0
+        else:
+            t0, dt = get_timesteps(self.flow_schedule, self.num_k_infer, exp_scale=self.exp_scale)
+
+        if yprof is not None:
+            cuda_sync()
+            loop_t0 = time.perf_counter()
         for i in range(self.num_k_infer):
             assert z.shape[-1] == D
             timesteps = torch.ones((B), device=DEVICE) * t0[i]
@@ -1018,14 +1045,32 @@ class FMPolicy(ComposerModel, BasePolicy):
                 assert z_in.shape[-1] == D + E
             else:
                 z_in = z
+            if yprof is not None:
+                cuda_sync()
+                t_unet0 = time.perf_counter()
             vel_full = self.diffusion_net(z_in, timesteps, global_cond=nx)
+            if yprof is not None:
+                cuda_sync()
+                yprof["unet_total_ms"] += (time.perf_counter() - t_unet0) * 1000.0
+                yprof["nfe"] += 1.0
             nfe_this_call += 1
             vel = self._slice_velocity(vel_full)
+            if yprof is not None:
+                cuda_sync()
+                t_clone0 = time.perf_counter()
             z = z.detach().clone() + vel * dt[i]
+            if yprof is not None:
+                cuda_sync()
+                yprof["clone_detach_ms"] += (time.perf_counter() - t_clone0) * 1000.0
             assert z.shape[-1] == D
             traj.append(z)
+        if yprof is not None:
+            cuda_sync()
+            yprof["loop_total_ms"] += (time.perf_counter() - loop_t0) * 1000.0
 
         infer_ms = (time.perf_counter() - infer_t0) * 1000.0
+        if yprof is not None:
+            self._last_infer_y_profile = yprof
         self.last_infer_nfe = int(nfe_this_call)
         self._infer_calls_total += 1
         self._infer_actions_total += int(B)

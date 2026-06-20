@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from pfp import DEVICE
+from pfp.common.inference_profiling import blank_infer_y_profile, cuda_sync
 from pfp.policy.fm_policy import FMPolicy
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,7 @@ class ShortcutFMPolicy(FMPolicy):
         d: torch.Tensor,
         nx: torch.Tensor,
         phase_flow: torch.Tensor | None = None,
+        yprof: dict[str, float] | None = None,
     ) -> torch.Tensor:
         b = x_t.shape[0]
         if self.phase_enabled:
@@ -140,8 +142,21 @@ class ShortcutFMPolicy(FMPolicy):
         else:
             x_in = x_t
         timesteps = t.view(b) * self.pos_emb_scale if self.time_conditioning else None
-        global_cond = self._augment_global_cond_with_d(nx, d)
-        pred_full = self.diffusion_net(x_in, timesteps, global_cond=global_cond)
+        if yprof is not None:
+            cuda_sync()
+            t_mlp0 = time.perf_counter()
+            global_cond = self._augment_global_cond_with_d(nx, d)
+            cuda_sync()
+            yprof["extra_mlp_ms"] += (time.perf_counter() - t_mlp0) * 1000.0
+            cuda_sync()
+            t_unet0 = time.perf_counter()
+            pred_full = self.diffusion_net(x_in, timesteps, global_cond=global_cond)
+            cuda_sync()
+            yprof["unet_total_ms"] += (time.perf_counter() - t_unet0) * 1000.0
+            yprof["nfe"] += 1.0
+        else:
+            global_cond = self._augment_global_cond_with_d(nx, d)
+            pred_full = self.diffusion_net(x_in, timesteps, global_cond=global_cond)
         pred = self._slice_velocity(pred_full)
         return pred
 
@@ -310,12 +325,25 @@ class ShortcutFMPolicy(FMPolicy):
         return_traj=False,
     ) -> torch.Tensor:
         infer_t0 = time.perf_counter()
-        nx = self.encode_obs(pcd, robot_state_obs)
+        yprof = blank_infer_y_profile() if self.profile_inference else None
+
+        if yprof is not None:
+            cuda_sync()
+            t_enc0 = time.perf_counter()
+            nx = self.encode_obs(pcd, robot_state_obs)
+            cuda_sync()
+            yprof["encode_obs_ms"] += (time.perf_counter() - t_enc0) * 1000.0
+        else:
+            nx = self.encode_obs(pcd, robot_state_obs)
+
         b = nx.shape[0]
         z = self._init_noise(b) if noise is None else noise
         traj = [z]
 
         phase_seq = None
+        if yprof is not None:
+            cuda_sync()
+            t_phase0 = time.perf_counter()
         if self.phase_enabled:
             if phase is None:
                 if self.phase_pred_enabled:
@@ -332,23 +360,34 @@ class ShortcutFMPolicy(FMPolicy):
             if phase_seq.shape != (b, self.n_pred_steps):
                 raise ValueError(f"phase must broadcast to (B,T)={(b,self.n_pred_steps)}, got {tuple(phase_seq.shape)}")
 
+        if yprof is not None:
+            cuda_sync()
+            yprof["other_loop_ms"] += (time.perf_counter() - t_phase0) * 1000.0
+
         k = int(self.num_k_infer)
         if k <= 0:
             raise ValueError("num_k_infer must be >= 1")
 
+        if yprof is not None:
+            cuda_sync()
+            loop_t0 = time.perf_counter()
         if k == 1:
             d = torch.ones((b, 1, 1), device=DEVICE)
             t = torch.zeros((b, 1, 1), device=DEVICE)
-            v = self._forward_shortcut(z, t, d, nx, phase_flow=phase_seq)
+            v = self._forward_shortcut(z, t, d, nx, phase_flow=phase_seq, yprof=yprof)
             z = z + d * v
             traj.append(z)
         else:
             d = torch.full((b, 1, 1), 1.0 / float(k), device=DEVICE)
             for i in range(k):
                 t = torch.full((b, 1, 1), float(i) / float(k), device=DEVICE)
-                v = self._forward_shortcut(z, t, d, nx, phase_flow=phase_seq)
+                v = self._forward_shortcut(z, t, d, nx, phase_flow=phase_seq, yprof=yprof)
                 z = z + d * v
                 traj.append(z)
+        if yprof is not None:
+            cuda_sync()
+            yprof["loop_total_ms"] += (time.perf_counter() - loop_t0) * 1000.0
+            self._last_infer_y_profile = yprof
 
         infer_ms = (time.perf_counter() - infer_t0) * 1000.0
         self.last_infer_nfe = int(k)

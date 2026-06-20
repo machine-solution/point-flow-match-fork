@@ -21,6 +21,7 @@ if not hasattr(_cuda_gs, "_refresh_per_optimizer_state"):
         pass
 
 import json
+import inspect
 from pathlib import Path
 
 import hydra
@@ -56,23 +57,33 @@ def main(cfg: OmegaConf):
         cfg.env_runner.env_config.headless = True
 
     policy_class = hydra.utils.get_class(train_cfg.model._target_)
-    policy: BasePolicy = policy_class.load_from_checkpoint(
-        ckpt_name=cfg.policy.ckpt_name,
-        ckpt_episode=cfg.policy.get("ckpt_episode", "latest"),
-        num_k_infer=cfg.policy.get("num_k_infer", 50),
-        flow_schedule=cfg.policy.get("flow_schedule", None),
-        exp_scale=cfg.policy.get("exp_scale", None),
-        subs_factor=cfg.policy.get("subs_factor", 1),
-        phase_conditioning=getattr(cfg, "phase_conditioning", None),
-        phase_prediction=getattr(cfg, "phase_prediction", None),
-        phase_rollout=getattr(cfg, "phase_rollout", None),
-    )
+    load_kwargs = {
+        "ckpt_name": cfg.policy.ckpt_name,
+        "ckpt_episode": cfg.policy.get("ckpt_episode", "latest"),
+        "num_k_infer": cfg.policy.get("num_k_infer", 50),
+        "flow_schedule": cfg.policy.get("flow_schedule", None),
+        "exp_scale": cfg.policy.get("exp_scale", None),
+        "subs_factor": cfg.policy.get("subs_factor", 1),
+        "phase_conditioning": getattr(cfg, "phase_conditioning", None),
+        "phase_prediction": getattr(cfg, "phase_prediction", None),
+        "phase_rollout": getattr(cfg, "phase_rollout", None),
+    }
+    sig = inspect.signature(policy_class.load_from_checkpoint)
+    if "meanflow_multistep_infer" in sig.parameters:
+        load_kwargs["meanflow_multistep_infer"] = bool(cfg.policy.get("meanflow_multistep_infer", False))
+    policy: BasePolicy = policy_class.load_from_checkpoint(**load_kwargs)
+    # Runtime toggle for MeanFlow if the loader signature does not expose this kwarg.
+    if bool(cfg.policy.get("meanflow_multistep_infer", False)) and hasattr(policy, "set_meanflow_multistep_infer"):
+        policy.set_meanflow_multistep_infer(True)
+        policy.set_num_k_infer(int(cfg.policy.get("num_k_infer", 1)))
     print(f"[model] class={policy.__class__.__name__} target={train_cfg.model._target_}")
     print(f"[model] num_k_infer={getattr(policy, 'num_k_infer', None)}")
     if hasattr(policy, "meanflow_enabled"):
         print(
             f"[model] meanflow.enabled={getattr(policy, 'meanflow_enabled', None)} "
             f"one_step={getattr(policy, 'meanflow_one_step', None)} "
+            f"multistep_infer={getattr(policy, 'meanflow_multistep_infer', None)} "
+            f"sampler_mode={getattr(policy, 'sampler_mode', None)} "
             f"meanflow_nfe={getattr(policy, 'meanflow_nfe', None)}"
         )
     env_runner = RLBenchRunner(**cfg.env_runner)
@@ -103,6 +114,7 @@ def main(cfg: OmegaConf):
         "nfe_per_action": float(diagnostics.get("nfe_per_action", 0.0)),
         "mean_episode_time_s": float(diagnostics.get("mean_episode_time_s", 0.0)),
         "policy_inference_diagnostics": diagnostics.get("policy_inference_diagnostics", {}),
+        "sampler_mode": str(getattr(policy, "sampler_mode", policy.__class__.__name__)),
         "phase_conditioning": str(getattr(cfg, "phase_conditioning", None)),
         "phase_prediction": str(getattr(cfg, "phase_prediction", None)),
         "episodes": [

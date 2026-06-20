@@ -163,3 +163,65 @@ Results:
 
 Conclusion:
 - quality increases with `K` for this checkpoint (`12% -> 24%`), and per-action inference cost scales roughly linearly with `K`.
+
+## 2026-06-11 - StepConditionedMeanFlow checkpoint `step_conditioned_meanflow_open_fridge_1392` (validation)
+
+Measured (accuracy):
+- command: `CONDA_ENV=pfp_env bash bash/run_validate_accuracy.sh step_conditioned_meanflow_open_fridge_1392 100`
+- output file: `results/validate_accuracy_step_conditioned_meanflow_open_fridge_1392_20260611_073224.txt`
+- runtime: `7:15:08` for `100` episodes
+- result: success `13/100` (`13.0%`), avg steps (successful) `80.5`
+
+Notes:
+- eval path currently uses `policy.num_k_infer=50` from `conf/eval.yaml` unless overridden.
+
+## 2026-06-11 - StepConditionedMeanFlow `K=1` vs `K=10` (explicit sweep)
+
+Measured:
+- command: `conda run -n pfp_env python scripts/sweep_num_k_infer.py --ckpt-name step_conditioned_meanflow_open_fridge_1392 --ckpt-episode latest --num-episodes 100 --max-episode-length 120 --ks 1,10 ...`
+- output csv: `results/efficiency/k_sweep_step_conditioned_meanflow_open_fridge_1392_n100_k1_k10.csv`
+- output json: `results/efficiency/k_sweep_step_conditioned_meanflow_open_fridge_1392_n100_k1_k10.json`
+
+Results:
+- `K=1`: success `14/100` (`14%`), mean_inference_ms `31.93`, nfe/action `1.0`
+- `K=10`: success `18/100` (`18%`), mean_inference_ms `208.84`, nfe/action `10.0`
+
+Conclusion:
+- explicit `K` override works as expected (`nfe/action` matches `K`);
+- higher `K` improves quality for this checkpoint (`+4 pp`), at ~`6.5x` higher per-action inference time.
+
+## 2026-06-14 - MeanFlow true multistep K-sweep (`meanflow_multistep_infer=true`)
+
+Context:
+- fixes bug from `2026-06-08` sweep where `policy.num_k_infer` was ignored and `nfe/action` stayed `1.0` for all `K`;
+- sampler mode: `meanflow_multistep` (`x <- x + dt * u`, `NFE/action = K`).
+
+Measured:
+- command: `conda run -n pfp_env python scripts/sweep_num_k_infer.py --ckpt-name meanflow_open_fridge_1365 --ckpt-episode latest --num-episodes 100 --max-episode-length 120 --seed 5678 --ks 1,2,4,6,8,10 --meanflow-multistep --resume-existing ...`
+- output csv: `results/efficiency/k_sweep_meanflow_open_fridge_1365_n100_k1_2_4_6_8_10_multistep.csv`
+- output json: `results/efficiency/k_sweep_meanflow_open_fridge_1365_n100_k1_2_4_6_8_10_multistep.json`
+- log: `results/efficiency/k_sweep_meanflow_open_fridge_1365_n100_k1_2_4_6_8_10_multistep.log`
+- run was interrupted once after `K=2`; resumed with `--resume-existing` and completed `K=4,6,8,10`.
+
+Results:
+- `K=1`: success `7/100` (`7%`), mean_inference_ms `30.04`, std `7.22`, nfe/action `1.0`, mean_episode_time_s `28.50`
+- `K=2`: success `22/100` (`22%`), mean_inference_ms `45.32`, std `9.56`, nfe/action `2.0`, mean_episode_time_s `26.29`
+- `K=4`: success `22/100` (`22%`), mean_inference_ms `80.07`, std `13.52`, nfe/action `4.0`, mean_episode_time_s `29.88`
+- `K=6`: success `22/100` (`22%`), mean_inference_ms `117.59`, std `17.99`, nfe/action `6.0`, mean_episode_time_s `34.06`
+- `K=8`: success `22/100` (`22%`), mean_inference_ms `156.62`, std `26.26`, nfe/action `8.0`, mean_episode_time_s `38.38`
+- `K=10`: success `26/100` (`26%`), mean_inference_ms `194.01`, std `30.27`, nfe/action `10.0`, mean_episode_time_s `41.02`
+
+Comparison vs old broken MeanFlow sweep (`2026-06-08`, one-step only):
+- old `K=1`: `10%` at `34.13 ms`, nfe `1.0`; new multistep `K=1`: `7%` at `30.04 ms`, nfe `1.0` (one-step path unchanged in quality band);
+- old sweep: all `K` had nfe `1.0` and SR `6-11%`; new multistep: nfe scales with `K`, SR jumps to `22%` at `K>=2`.
+
+Comparison vs baseline / Shortcut (same `N=100`, `max=120`, seed `5678` where available):
+- baseline `K=10`: `28%` at `~3179 ms` (old sweep csv) / `~194 ms` (microbench);
+- Shortcut `K=10`: `24%` at `216.62 ms`, nfe `10.0`;
+- MeanFlow multistep `K=10`: `26%` at `194.01 ms`, nfe `10.0` (similar quality to Shortcut `K=10`, similar per-action cost to baseline FM microbench `K=10`).
+
+Conclusion:
+- true multistep inference works (`nfe/action == K` verified in json diagnostics);
+- large quality gain from `K=1` to `K=2` (`+15 pp`), then plateau `22%` until `K=10` (`26%`);
+- per-action latency grows ~linearly (`~19-20 ms` per extra NFE);
+- at `K=10`, MeanFlow multistep reaches near-Shortcut quality with comparable per-action inference time.

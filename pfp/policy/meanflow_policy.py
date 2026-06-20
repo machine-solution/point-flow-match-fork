@@ -7,6 +7,7 @@ import torch.nn as nn
 
 from pfp import DEVICE
 from pfp.common.phase_utils import compute_phase_labels_torch_from_gripper
+from pfp.common.inference_profiling import blank_infer_y_profile, cuda_sync
 from pfp.policy.fm_policy import FMPolicy
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,8 @@ class MeanFlowPolicy(FMPolicy):
         self.interval_hidden_dim = int(interval_hidden_dim)
         self.meanflow_enabled = True if meanflow is None else bool(meanflow.get("enabled", True))
         self.meanflow_one_step = True if meanflow is None else bool(meanflow.get("one_step", True))
+        self.meanflow_multistep_infer = False if meanflow is None else bool(meanflow.get("multistep_infer", False))
+        self.sampler_mode = "meanflow_multistep" if self.meanflow_multistep_infer else "meanflow_one_step"
         self.meanflow_nfe: int = 0
         self.interval_mlp = nn.Sequential(
             nn.Linear(3, self.interval_hidden_dim),
@@ -42,13 +45,17 @@ class MeanFlowPolicy(FMPolicy):
         total_trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         diffusion_trainable = sum(p.numel() for p in self.diffusion_net.parameters() if p.requires_grad)
         obs_encoder_trainable = sum(p.numel() for p in self.obs_encoder.parameters() if p.requires_grad)
-        # MeanFlow is designed as one-step. Keep API-compatible setter but pin NFE to 1.
-        self.num_k_infer = 1
+        # Default MeanFlow behavior is one-step unless multistep flag is explicitly enabled.
+        self.num_k_infer = max(1, int(getattr(self, "num_k_infer", 1)))
+        if not self.meanflow_multistep_infer:
+            self.num_k_infer = 1
         logger.info(
-            "[MeanFlow] enabled=%s one_step=%s num_k_infer=%d interval_embed_dim=%d "
+            "[MeanFlow] enabled=%s one_step=%s multistep_infer=%s sampler_mode=%s num_k_infer=%d interval_embed_dim=%d "
             "params_trainable(total=%d diffusion=%d obs_encoder=%d)",
             self.meanflow_enabled,
             self.meanflow_one_step,
+            self.meanflow_multistep_infer,
+            self.sampler_mode,
             self.num_k_infer,
             self.interval_embed_dim,
             total_trainable,
@@ -57,6 +64,7 @@ class MeanFlowPolicy(FMPolicy):
         )
         print(
             f"[MeanFlow] enabled={self.meanflow_enabled} one_step={self.meanflow_one_step} "
+            f"multistep_infer={self.meanflow_multistep_infer} sampler_mode={self.sampler_mode} "
             f"num_k_infer={self.num_k_infer} interval_embed_dim={self.interval_embed_dim}"
         )
         print(
@@ -64,10 +72,33 @@ class MeanFlowPolicy(FMPolicy):
             f"total={total_trainable} diffusion={diffusion_trainable} obs_encoder={obs_encoder_trainable}"
         )
 
+    def set_meanflow_multistep_infer(self, enabled: bool):
+        self.meanflow_multistep_infer = bool(enabled)
+        self.sampler_mode = "meanflow_multistep" if self.meanflow_multistep_infer else "meanflow_one_step"
+        if not self.meanflow_multistep_infer:
+            self.num_k_infer = 1
+        logger.info(
+            "[MeanFlow] set_meanflow_multistep_infer=%s sampler_mode=%s num_k_infer=%d",
+            self.meanflow_multistep_infer,
+            self.sampler_mode,
+            int(self.num_k_infer),
+        )
+        return
+
     def set_num_k_infer(self, num_k_infer: int):
-        if int(num_k_infer) != 1:
-            logger.warning("MeanFlowPolicy enforces one-step inference (requested num_k_infer=%s).", num_k_infer)
-        self.num_k_infer = 1
+        k = int(num_k_infer)
+        if k <= 0:
+            raise ValueError("num_k_infer must be >= 1")
+        if not self.meanflow_multistep_infer:
+            if k != 1:
+                logger.warning(
+                    "MeanFlowPolicy one-step mode ignores requested num_k_infer=%s. "
+                    "Enable meanflow_multistep_infer=true for true K-step inference.",
+                    k,
+                )
+            self.num_k_infer = 1
+        else:
+            self.num_k_infer = k
         return
 
     def _interval_global_cond(self, nx: torch.Tensor, r: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
@@ -177,35 +208,76 @@ class MeanFlowPolicy(FMPolicy):
     ) -> torch.Tensor:
         t0 = time.perf_counter()
         self.meanflow_nfe = 0
+        yprof = blank_infer_y_profile() if self.profile_inference else None
 
-        nx = self.encode_obs(pcd, robot_state_obs)
+        if yprof is not None:
+            cuda_sync()
+            t_enc0 = time.perf_counter()
+            nx = self.encode_obs(pcd, robot_state_obs)
+            cuda_sync()
+            yprof["encode_obs_ms"] += (time.perf_counter() - t_enc0) * 1000.0
+        else:
+            nx = self.encode_obs(pcd, robot_state_obs)
+
         B = nx.shape[0]
         z0 = self._init_noise(B) if noise is None else noise
+        z = z0
+        if yprof is not None:
+            cuda_sync()
+            t_phase0 = time.perf_counter()
         phase_seq = self._infer_phase_seq(nx, robot_state_obs, phase)
-        if self.phase_enabled:
-            assert phase_seq is not None
-            z_in = torch.cat([z0, self.phase_embedding(phase_seq)], dim=-1)
-        else:
-            z_in = z0
+        if yprof is not None:
+            cuda_sync()
+            yprof["other_loop_ms"] += (time.perf_counter() - t_phase0) * 1000.0
 
-        r = torch.zeros((B, 1, 1), device=DEVICE)
-        t = torch.ones((B, 1, 1), device=DEVICE)
-        timesteps = r.view(B) * self.pos_emb_scale if self.time_conditioning else None
-        global_cond = self._interval_global_cond(nx, r, t)
-        u_pred_full = self.diffusion_net(z_in, timesteps, global_cond=global_cond)
-        self.meanflow_nfe += 1
-        u_pred = self._slice_velocity(u_pred_full)
-        pred = z0 + u_pred
+        k = int(self.num_k_infer) if self.meanflow_multistep_infer else 1
+        if k <= 0:
+            raise ValueError("num_k_infer must be >= 1")
+        traj = [z]
+        inv_k = 1.0 / float(k)
+        if yprof is not None:
+            cuda_sync()
+            loop_t0 = time.perf_counter()
+        for i in range(k):
+            r = torch.full((B, 1, 1), float(i) * inv_k, device=DEVICE, dtype=z.dtype)
+            t = torch.full((B, 1, 1), float(i + 1) * inv_k, device=DEVICE, dtype=z.dtype)
+            dt = t - r
+            if self.phase_enabled:
+                assert phase_seq is not None
+                z_in = torch.cat([z, self.phase_embedding(phase_seq)], dim=-1)
+            else:
+                z_in = z
+            timesteps = r.view(B) * self.pos_emb_scale if self.time_conditioning else None
+            if yprof is not None:
+                cuda_sync()
+                t_mlp0 = time.perf_counter()
+                global_cond = self._interval_global_cond(nx, r, t)
+                cuda_sync()
+                yprof["extra_mlp_ms"] += (time.perf_counter() - t_mlp0) * 1000.0
+                cuda_sync()
+                t_unet0 = time.perf_counter()
+                u_pred_full = self.diffusion_net(z_in, timesteps, global_cond=global_cond)
+                cuda_sync()
+                yprof["unet_total_ms"] += (time.perf_counter() - t_unet0) * 1000.0
+                yprof["nfe"] += 1.0
+            else:
+                global_cond = self._interval_global_cond(nx, r, t)
+                u_pred_full = self.diffusion_net(z_in, timesteps, global_cond=global_cond)
+            self.meanflow_nfe += 1
+            u_pred = self._slice_velocity(u_pred_full)
+            z = z + dt * u_pred
+            traj.append(z)
+        if yprof is not None:
+            cuda_sync()
+            yprof["loop_total_ms"] += (time.perf_counter() - loop_t0) * 1000.0
+            self._last_infer_y_profile = yprof
 
         # Keep diagnostics API compatible with FMPolicy.
-        self.last_infer_nfe = 1
+        self.last_infer_nfe = int(self.meanflow_nfe)
         self._infer_calls_total += 1
         self._infer_actions_total += int(B)
-        self._infer_nfe_total += int(B)
+        self._infer_nfe_total += int(self.meanflow_nfe) * int(B)
         self._infer_time_total_ms += float((time.perf_counter() - t0) * 1000.0)
-        if self.meanflow_nfe != 1:
-            raise RuntimeError(f"[MeanFlow] expected exactly one diffusion call, got {self.meanflow_nfe}")
-
         if return_traj:
-            return torch.stack([z0, pred])
-        return pred
+            return torch.stack(traj)
+        return traj[-1]

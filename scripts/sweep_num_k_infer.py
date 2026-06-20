@@ -80,6 +80,11 @@ def main() -> None:
     ap.add_argument("--phase-conditioning", choices=("enabled", "disabled"), default="disabled")
     ap.add_argument("--phase-prediction", choices=("enabled", "disabled"), default="disabled")
     ap.add_argument(
+        "--meanflow-multistep",
+        action="store_true",
+        help="Enable true K-step MeanFlow sampler (x <- x + dt*u per step).",
+    )
+    ap.add_argument(
         "--output-csv",
         type=Path,
         default=Path("results/efficiency/k_sweep.csv"),
@@ -131,6 +136,7 @@ def main() -> None:
                     {
                         "checkpoint": r["checkpoint"],
                         "ckpt_episode": r.get("ckpt_episode", args.ckpt_episode),
+                        "sampler_mode": r.get("sampler_mode", "unknown"),
                         "num_k_infer": k,
                         "num_episodes": int(r["num_episodes"]),
                         "success_rate": float(r["success_rate"]),
@@ -150,6 +156,7 @@ def main() -> None:
     fieldnames = [
         "checkpoint",
         "ckpt_episode",
+        "sampler_mode",
         "num_k_infer",
         "num_episodes",
         "success_rate",
@@ -197,6 +204,8 @@ def main() -> None:
             f"phase_prediction={phase_prediction}",
             f"results_json={tmp_json}",
         ]
+        if args.meanflow_multistep:
+            cmd.append("+policy.meanflow_multistep_infer=true")
         if args.flow_schedule is not None:
             cmd.append(f"policy.flow_schedule={args.flow_schedule}")
         if args.exp_scale is not None:
@@ -239,6 +248,7 @@ def main() -> None:
         row = {
             "checkpoint": ckpt_name,
             "ckpt_episode": args.ckpt_episode,
+            "sampler_mode": str(run.get("sampler_mode", "unknown")),
             "num_k_infer": int(k),
             "num_episodes": int(n),
             "success_rate": success_rate,
@@ -260,7 +270,7 @@ def main() -> None:
         _flush_partial()
         done_k.add(int(k))
         print(
-            f"K={k:>2d} | success={n_success}/{n} ({100*success_rate:.1f}%) | "
+            f"K={k:>2d} [{row['sampler_mode']}] | success={n_success}/{n} ({100*success_rate:.1f}%) | "
             f"infer={row['mean_inference_ms']:.2f}±{row['std_inference_ms']:.2f} ms | "
             f"nfe/action={row['nfe_per_action']:.2f} | episode_time={row['mean_episode_time_s']:.2f}s"
         )
