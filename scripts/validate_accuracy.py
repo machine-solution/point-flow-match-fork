@@ -76,8 +76,17 @@ def main(cfg: OmegaConf):
     if bool(cfg.policy.get("meanflow_multistep_infer", False)) and hasattr(policy, "set_meanflow_multistep_infer"):
         policy.set_meanflow_multistep_infer(True)
         policy.set_num_k_infer(int(cfg.policy.get("num_k_infer", 1)))
+    mm_schedule = cfg.policy.get("momentum_meanflow_schedule", None)
+    if mm_schedule is not None and hasattr(policy, "set_momentum_meanflow_schedule"):
+        policy.set_momentum_meanflow_schedule(str(mm_schedule))
     print(f"[model] class={policy.__class__.__name__} target={train_cfg.model._target_}")
     print(f"[model] num_k_infer={getattr(policy, 'num_k_infer', None)}")
+    if hasattr(policy, "mm_cfg"):
+        print(
+            f"[model] momentum_meanflow schedule={policy.mm_cfg.momentum_meanflow_schedule} "
+            f"lambda_correct={policy.mm_cfg.lambda_correct} dt_min={policy.mm_cfg.dt_min} "
+            f"sampler_mode={getattr(policy, 'sampler_mode', None)}"
+        )
     if hasattr(policy, "meanflow_enabled"):
         print(
             f"[model] meanflow.enabled={getattr(policy, 'meanflow_enabled', None)} "

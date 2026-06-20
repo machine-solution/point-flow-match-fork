@@ -269,6 +269,7 @@ class FMPolicy(ComposerModel, BasePolicy):
         phase_conditioning: dict | None = None,
         phase_prediction: dict | None = None,
         phase_rollout: dict | None = None,
+        state_input_multiplier: int = 1,
     ) -> None:
         ComposerModel.__init__(self)
         BasePolicy.__init__(self, n_obs_steps, subs_factor)
@@ -333,7 +334,7 @@ class FMPolicy(ComposerModel, BasePolicy):
             logger.warning(
                 "phase_rollout.enabled=true but phase_conditioning.enabled=false — rollout phase scheduler ignored."
             )
-        effective_input_dim = int(y_dim)
+        effective_input_dim = int(y_dim) * max(1, int(state_input_multiplier))
         if self.phase_enabled:
             effective_input_dim += int(self.phase_cfg.phase_embed_dim)
 

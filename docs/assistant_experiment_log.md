@@ -225,3 +225,30 @@ Conclusion:
 - large quality gain from `K=1` to `K=2` (`+15 pp`), then plateau `22%` until `K=10` (`26%`);
 - per-action latency grows ~linearly (`~19-20 ms` per extra NFE);
 - at `K=10`, MeanFlow multistep reaches near-Shortcut quality with comparable per-action inference time.
+
+## 2026-06-20 - Momentum / Self-Correcting MeanFlow implementation
+
+Context:
+- new policy `MomentumMeanFlowPolicy` trains first-step + corrective second-step losses with `prev_u` conditioning;
+- does not modify existing `MeanFlowPolicy`.
+
+Added:
+- `pfp/policy/momentum_meanflow_policy.py` — dual loss (`loss_first` + `lambda_correct * loss_correct`), multi-step infer with `prev_u`;
+- `pfp/common/momentum_meanflow_utils.py` — time sampling + inference grids (`uniform`, `fm_exp`, `cosine`, `beta_2_2`, `small_end`);
+- `conf/model/momentum_meanflow.yaml`, `conf/experiment/pointflowmatch_momentum_meanflow.yaml`;
+- `scripts/debug_momentum_meanflow_config.py` — forward/backward, shape checks, correction-target sanity;
+- `dexter/run_pointflowmatch_open_fridge_momentum_meanflow.sbatch`;
+- eval hooks: `validate_accuracy.py` + `sweep_num_k_infer.py` accept `policy.momentum_meanflow_schedule`.
+
+Key design:
+- UNet input `[x_current, prev_u]` → `input_dim = 2 * y_dim`; output still `y_dim`;
+- interval conditioning `[t_prev, t_cur, t_next, dt_prev, dt_next]` via `interval_mlp(5→hidden→embed)` added to global cond;
+- correction path uses `u01_pred.detach()` and `x_t1_hat.detach()` so gradients do not cross the first model call.
+
+Sanity checks (local):
+- `python scripts/debug_momentum_meanflow_config.py` — passed (finite loss, backward, NFE=K for K in {1,2,5,10}, schedules uniform/fm_exp);
+- smoke train: `trainer.max_duration=2ba`, `run_name=momentum_meanflow_smoke` → `ckpt/momentum_meanflow_smoke/ep0-ba2-rank0.pt`.
+
+Not yet measured:
+- full Dexter train (`dexter/run_pointflowmatch_open_fridge_momentum_meanflow.sbatch`);
+- K-sweep eval vs MeanFlow multistep / FM baseline / Shortcut after a trained checkpoint exists.

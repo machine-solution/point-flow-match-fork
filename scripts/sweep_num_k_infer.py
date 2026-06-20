@@ -85,6 +85,11 @@ def main() -> None:
         help="Enable true K-step MeanFlow sampler (x <- x + dt*u per step).",
     )
     ap.add_argument(
+        "--momentum-meanflow-schedule",
+        default=None,
+        help="Override MomentumMeanFlow inference schedule (uniform, fm_exp, ...).",
+    )
+    ap.add_argument(
         "--output-csv",
         type=Path,
         default=Path("results/efficiency/k_sweep.csv"),
@@ -206,6 +211,8 @@ def main() -> None:
         ]
         if args.meanflow_multistep:
             cmd.append("+policy.meanflow_multistep_infer=true")
+        if args.momentum_meanflow_schedule is not None:
+            cmd.append(f"+policy.momentum_meanflow_schedule={args.momentum_meanflow_schedule}")
         if args.flow_schedule is not None:
             cmd.append(f"policy.flow_schedule={args.flow_schedule}")
         if args.exp_scale is not None:

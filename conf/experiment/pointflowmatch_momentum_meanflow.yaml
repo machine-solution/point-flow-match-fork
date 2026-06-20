@@ -1,0 +1,7 @@
+# @package _global_
+
+defaults:
+  - override /model: momentum_meanflow
+  - override /phase_conditioning: disabled
+  - override /phase_prediction: disabled
+  - override /phase_rollout: disabled
