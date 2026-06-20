@@ -256,6 +256,7 @@ In the `dexter/` folder you can find helper files for running PointFlowMatch tra
 - `dexter/pfp_train_env.yml` – Conda environment for offline training (no CoppeliaSim / RLBench required).
 - `dexter/run_pointflowmatch_open_fridge.sbatch` – example Slurm script for training the PointFlowMatch baseline on the `open_fridge` task using existing demos.
 - `dexter/run_pointflowmatch_open_fridge_phase_prediction.sbatch` – Slurm training for **FMPolicy + learned phase head** (`phase_conditioning=enabled`, `phase_prediction=enabled`).
+- `dexter/run_pointflowmatch_open_fridge_momentum_meanflow.sbatch` – Slurm training for **Momentum / Self-Correcting MeanFlow** (`+experiment=pointflowmatch_momentum_meanflow`).
 - `dexter/verify_training_setup.py` – quick check that Hydra instantiates `FMPolicy` with the intended phase settings (no GPU/dataset).
 - `dexter/download_dataset.sh` / `dexter/download_open_fridge_two_phase.sh` – download baseline or two-phase zarr from Yandex Disk (run from repo root).
 - `dexter/run_open_fridge_pre_grasp.sbatch`, `dexter/run_open_fridge_post_grasp.sbatch`, `dexter/run_open_fridge_two_phase_chain.sbatch` – Slurm training for two-phase `open_fridge` on Dexter (conda `pfp-train-env`).
@@ -272,6 +273,9 @@ conda env create -f dexter/pfp_train_env.yml -p ./pfp-train-env
 
 # Submit training job (from repo root)
 sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+
+# Momentum / Self-Correcting MeanFlow (open_fridge, 1500 epochs, milestone checkpoints)
+sbatch dexter/run_pointflowmatch_open_fridge_momentum_meanflow.sbatch
 ```
 
 For **`dexter/run_pointflowmatch_open_fridge.sbatch`**, put data under `demos/sim/open_fridge/train` and `valid` (the sbatch may call `bash dexter/download_dataset.sh` if missing). For **two-phase** training on Dexter, run `bash dexter/download_open_fridge_two_phase.sh`, then e.g. `PRE=$(sbatch --parsable dexter/run_open_fridge_pre_grasp.sbatch)` and `sbatch --dependency=afterok:"$PRE" dexter/run_open_fridge_post_grasp.sbatch`, or use `dexter/run_open_fridge_two_phase_chain.sbatch` for one long job. See **`dexter/README_pointflowmatch_dexter.md`** §3.

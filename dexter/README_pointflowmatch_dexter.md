@@ -235,6 +235,23 @@ sbatch dexter/run_pointflowmatch_open_fridge_step_conditioned_meanflow.sbatch
 `checkpoint_schedule=final_1500_only`: сохраняется только финальный чекпоинт `ep1500`
 (без промежуточных `ep300/600/900/1200`).
 
+**Momentum / Self-Correcting MeanFlow (готовый sbatch):**
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+conda activate ./pfp-train-env
+
+sbatch dexter/run_pointflowmatch_open_fridge_momentum_meanflow.sbatch
+```
+
+Модель: `MomentumMeanFlowPolicy` — first-step loss + corrective second-step loss с
+`prev_u` в conditioning; multi-step inference (`num_k_infer=10`, schedule `uniform`).
+Чекпоинты: `ckpt/momentum_meanflow_open_fridge_<JOB_ID>/`, бэкап в
+`~/checkpoints/pointflowmatch_momentum_meanflow/`. Логи:
+`logs/pfm_open_fridge_momentum_mf_<JOB>.out`.
+
+Перед запуском (локально): `python scripts/debug_momentum_meanflow_config.py`.
+
 **Двухфазное обучение (pre, затем post)** — из корня репозитория, окружение `pfp-train-env` уже используется внутри `.sbatch` (как в `run_pointflowmatch_open_fridge.sbatch`):
 
 ```bash
@@ -444,11 +461,14 @@ bash bash/run_validate_milestone_sweep.sh <run_name> 100 \
 | **Learned phase (эта модель)** | `run_pointflowmatch_open_fridge_phase_prediction.sbatch` | `phase_conditioning=enabled`, `phase_prediction=enabled` |
 | Learned phase + gripper weights | `run_pointflowmatch_open_fridge_gripper_weighted_phase_prediction.sbatch` | `+experiment=pointflowmatch_gripper_weighted` + phase flags |
 | StepConditionedMeanFlow | `run_pointflowmatch_open_fridge_step_conditioned_meanflow.sbatch` | `+experiment=pointflowmatch_step_conditioned_meanflow` |
+| **Momentum / Self-Correcting MeanFlow** | `run_pointflowmatch_open_fridge_momentum_meanflow.sbatch` | `+experiment=pointflowmatch_momentum_meanflow` |
 
 Строки `Baseline/Oracle/Learned phase/Learned phase + gripper weights` используют
 **`conf/model/flow.yaml`** → **`pfp.policy.fm_policy.FMPolicy`**.
 `StepConditionedMeanFlow` использует отдельные
 **`conf/model/step_conditioned_meanflow.yaml`** → **`pfp.policy.step_conditioned_meanflow_policy.StepConditionedMeanFlowPolicy`**.
+**Momentum MeanFlow** — **`conf/model/momentum_meanflow.yaml`** →
+**`pfp.policy.momentum_meanflow_policy.MomentumMeanFlowPolicy`** (отдельный UNet input `2×y_dim`, interval cond `[t_prev,t_cur,t_next,dt_prev,dt_next]`).
 
 Перед длинным job скрипт `dexter/verify_training_setup.py` проверяет, что Hydra собирает именно `FMPolicy` и что `phase_head` создаётся при `phase_prediction=enabled`.
 

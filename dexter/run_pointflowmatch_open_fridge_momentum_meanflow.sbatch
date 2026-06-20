@@ -1,9 +1,16 @@
 #!/bin/bash
 #
-# Slurm: train Momentum MeanFlow on open_fridge.
+# Slurm: train Momentum / Self-Correcting MeanFlow on open_fridge.
+# Policy: MomentumMeanFlowPolicy (+experiment=pointflowmatch_momentum_meanflow)
+#   - first-step + corrective second-step loss (prev_u conditioning)
+#   - multi-step inference, default K=10, schedule=uniform
 #
 # Usage (from repo root):
 #   sbatch dexter/run_pointflowmatch_open_fridge_momentum_meanflow.sbatch
+#
+# Logs:    logs/pfm_open_fridge_momentum_mf_<JOB>.out / .err
+# Checkpoints: ckpt/momentum_meanflow_open_fridge_<JOB>/
+# Backup:  ~/checkpoints/pointflowmatch_momentum_meanflow/
 #
 #SBATCH --job-name=pfm_open_fridge_momentum_mf
 #SBATCH --output=logs/pfm_open_fridge_momentum_mf_%j.out
