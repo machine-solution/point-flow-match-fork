@@ -27,6 +27,7 @@ class MomentumMeanFlowConfig:
     lambda_correct: float = 1.0
     dt_min: float = 1.0 / 32.0
     momentum_meanflow_schedule: str = "uniform"
+    start_case_ratio: float = 0.15
 
 
 class MomentumMeanFlowPolicy(FMPolicy):
@@ -60,6 +61,7 @@ class MomentumMeanFlowPolicy(FMPolicy):
                 momentum_meanflow_schedule
                 or cfg.get("momentum_meanflow_schedule", "uniform")
             ),
+            start_case_ratio=float(cfg.get("start_case_ratio", 0.15)),
         )
         if self.mm_cfg.momentum_meanflow_schedule not in MOMENTUM_INFER_SCHEDULES:
             raise ValueError(
@@ -83,11 +85,12 @@ class MomentumMeanFlowPolicy(FMPolicy):
             self.num_k_infer = 1
         logger.info(
             "[MomentumMeanFlow] num_k_infer=%d schedule=%s lambda_correct=%.4f dt_min=%.6f "
-            "state_input_multiplier=%d interval_embed_dim=%d",
+            "start_case_ratio=%.4f state_input_multiplier=%d interval_embed_dim=%d",
             int(self.num_k_infer),
             self.mm_cfg.momentum_meanflow_schedule,
             self.mm_cfg.lambda_correct,
             self.mm_cfg.dt_min,
+            self.mm_cfg.start_case_ratio,
             int(state_input_multiplier),
             self.mm_cfg.interval_embed_dim,
         )
@@ -97,6 +100,7 @@ class MomentumMeanFlowPolicy(FMPolicy):
             f"schedule={self.mm_cfg.momentum_meanflow_schedule} "
             f"lambda_correct={self.mm_cfg.lambda_correct} "
             f"dt_min={self.mm_cfg.dt_min} "
+            f"start_case_ratio={self.mm_cfg.start_case_ratio} "
             f"state_input_multiplier={int(state_input_multiplier)}"
         )
 
@@ -181,6 +185,80 @@ class MomentumMeanFlowPolicy(FMPolicy):
         loss_grip = (per_grip * weights).mean()
         return loss_xyz, loss_rot6d, loss_grip
 
+    def _weighted_velocity_loss_masked(
+        self,
+        pred_u: torch.Tensor,
+        target_u: torch.Tensor,
+        ny: torch.Tensor,
+        sample_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        if not bool(sample_mask.any()):
+            return None, None, None
+        pred_u = pred_u[sample_mask]
+        target_u = target_u[sample_mask]
+        ny = ny[sample_mask]
+        return self._weighted_velocity_loss(pred_u, target_u, ny)
+
+    def _first_step_loss_bundle(
+        self,
+        nx: torch.Tensor,
+        z0: torch.Tensor,
+        z1: torch.Tensor,
+        ny: torch.Tensor,
+        *,
+        dt_min: float,
+        device: torch.device,
+        phase_flow: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, float]]:
+        b = z0.shape[0]
+        start_ratio = float(self.mm_cfg.start_case_ratio)
+        start_ratio = min(max(start_ratio, 0.0), 1.0)
+        start_mask = (torch.rand(b, device=device) < start_ratio).view(b)
+
+        t0, t1 = sample_two_times(b, dt_min=dt_min, device=device)
+        if bool(start_mask.any()):
+            t0 = torch.where(start_mask.view(b, 1, 1), torch.zeros_like(t0), t0)
+
+        dt01 = torch.clamp(t1 - t0, min=dt_min)
+        x_t0 = (1.0 - t0) * z0 + t0 * z1
+        x_t1 = (1.0 - t1) * z0 + t1 * z1
+        prev_u0 = torch.zeros_like(x_t0)
+        u01_target = (x_t1 - x_t0) / dt01
+        u01_pred = self._forward_u(
+            nx,
+            x_t0,
+            prev_u0,
+            t_prev=t0,
+            t_cur=t0,
+            t_next=t1,
+            phase_flow=phase_flow,
+        )
+        l01_xyz, l01_rot6d, l01_grip = self._weighted_velocity_loss(u01_pred, u01_target, ny)
+
+        random_mask = ~start_mask
+        l01_start_xyz, l01_start_rot6d, l01_start_grip = self._weighted_velocity_loss_masked(
+            u01_pred, u01_target, ny, start_mask
+        )
+        l01_rand_xyz, l01_rand_rot6d, l01_rand_grip = self._weighted_velocity_loss_masked(
+            u01_pred, u01_target, ny, random_mask
+        )
+
+        def _bundle(x, y, z):
+            if x is None:
+                return None
+            return float((x + y + z).item())
+
+        extra = {
+            "momentum_meanflow/start_case_ratio_cfg": start_ratio,
+            "momentum_meanflow/start_case_frac_batch": float(start_mask.float().mean().item()),
+            "loss/train/momentum_loss_first": _bundle(l01_xyz, l01_rot6d, l01_grip),
+            "loss/train/momentum_loss_first_start": _bundle(l01_start_xyz, l01_start_rot6d, l01_start_grip),
+            "loss/train/momentum_loss_first_random": _bundle(l01_rand_xyz, l01_rand_rot6d, l01_rand_grip),
+            "momentum_meanflow/dt01_mean": float(dt01.mean().item()),
+            "momentum_meanflow/u01_norm": float(u01_pred.detach().norm(dim=-1).mean().item()),
+        }
+        return l01_xyz, l01_rot6d, l01_grip, u01_pred, extra
+
     def _compute_losses(
         self,
         pcd: torch.Tensor,
@@ -210,22 +288,15 @@ class MomentumMeanFlowPolicy(FMPolicy):
         z1 = ny
         dt_min = float(self.mm_cfg.dt_min)
 
-        t0, t1 = sample_two_times(b, dt_min=dt_min, device=device)
-        dt01 = torch.clamp(t1 - t0, min=dt_min)
-        x_t0 = (1.0 - t0) * z0 + t0 * z1
-        x_t1 = (1.0 - t1) * z0 + t1 * z1
-        prev_u0 = torch.zeros_like(x_t0)
-        u01_target = (x_t1 - x_t0) / dt01
-        u01_pred = self._forward_u(
+        l01_xyz, l01_rot6d, l01_grip, u01_pred, first_stats = self._first_step_loss_bundle(
             nx,
-            x_t0,
-            prev_u0,
-            t_prev=t0,
-            t_cur=t0,
-            t_next=t1,
+            z0,
+            z1,
+            ny,
+            dt_min=dt_min,
+            device=device,
             phase_flow=phase_flow,
         )
-        l01_xyz, l01_rot6d, l01_grip = self._weighted_velocity_loss(u01_pred, u01_target, ny)
 
         t0c, t1c, t2c = sample_three_times(b, dt_min=dt_min, device=device)
         dt01c = torch.clamp(t1c - t0c, min=dt_min)
@@ -262,11 +333,12 @@ class MomentumMeanFlowPolicy(FMPolicy):
         loss_rot6d = l01_rot6d + lam * l12_rot6d
         loss_grip = l01_grip + lam * l12_grip
 
+        loss_first_total = l01_xyz + l01_rot6d + l01_grip
+        loss_correct_total = l12_xyz + l12_rot6d + l12_grip
+
         stats = {
             "momentum_meanflow/lambda_correct": lam,
-            "momentum_meanflow/dt01_mean": float(dt01.mean().item()),
             "momentum_meanflow/dt12_mean": float(dt12.mean().item()),
-            "momentum_meanflow/u01_norm": float(u01_pred.detach().norm(dim=-1).mean().item()),
             "momentum_meanflow/u12_target_norm": float(u12_target.detach().norm(dim=-1).mean().item()),
             "momentum_meanflow/u12_pred_norm": float(u12_pred.detach().norm(dim=-1).mean().item()),
             "momentum_meanflow/correction_error_norm": float((x_t1_hat - x_t1).detach().norm(dim=-1).mean().item()),
@@ -276,9 +348,13 @@ class MomentumMeanFlowPolicy(FMPolicy):
             "loss/train/momentum_correct_xyz": float(l12_xyz.item()),
             "loss/train/momentum_correct_rot6d": float(l12_rot6d.item()),
             "loss/train/momentum_correct_grip": float(l12_grip.item()),
+            "loss/train/momentum_loss_correct": float(loss_correct_total.item()),
+            "loss/train/loss_first": float(loss_first_total.item()),
+            "loss/train/loss_correct": float(loss_correct_total.item()),
             "momentum_meanflow/num_k_infer": float(self.num_k_infer),
             "momentum_meanflow/schedule": self.mm_cfg.momentum_meanflow_schedule,
         }
+        stats.update(first_stats)
         stats.update(phase_metrics)
         return loss_xyz, loss_rot6d, loss_grip, stats
 
@@ -382,18 +458,15 @@ class MomentumMeanFlowPolicy(FMPolicy):
             if yprof is not None:
                 cuda_sync()
                 t_mlp0 = time.perf_counter()
-                u = self._forward_u(
-                    nx, z, prev_u, t_prev=t_prev, t_cur=t_cur, t_next=t_next, phase_flow=phase_flow
-                )
+            u = self._forward_u(
+                nx, z, prev_u, t_prev=t_prev, t_cur=t_cur, t_next=t_next, phase_flow=phase_flow
+            )
+            self.meanflow_nfe += 1
+            if yprof is not None:
                 cuda_sync()
                 yprof["extra_mlp_ms"] += (time.perf_counter() - t_mlp0) * 1000.0
                 yprof["unet_total_ms"] += (time.perf_counter() - t_mlp0) * 1000.0
                 yprof["nfe"] += 1.0
-            else:
-                u = self._forward_u(
-                    nx, z, prev_u, t_prev=t_prev, t_cur=t_cur, t_next=t_next, phase_flow=phase_flow
-                )
-            self.meanflow_nfe += 1
             z = z + dt_next * u
             prev_u = u
             traj.append(z)

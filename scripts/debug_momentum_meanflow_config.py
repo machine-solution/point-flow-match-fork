@@ -50,6 +50,7 @@ def main() -> None:
     print(f"diffusion_net_input_dim={getattr(model, 'diffusion_net_input_dim', None)}")
     print(f"schedule={model.mm_cfg.momentum_meanflow_schedule}")
     print(f"lambda_correct={model.mm_cfg.lambda_correct}")
+    print(f"start_case_ratio={model.mm_cfg.start_case_ratio}")
 
     b = 2
     t = int(cfg.n_pred_steps)
@@ -130,12 +131,17 @@ def main() -> None:
     assert out.shape == (b, t, d), f"unexpected infer shape {tuple(out.shape)}"
     print(f"===== Infer K={model.num_k_infer} ===== last_infer_nfe={model.last_infer_nfe}")
 
-    for k in (1, 2, 5, 10):
-        model.set_num_k_infer(k)
-        with torch.no_grad():
-            _ = model.infer_y(pcd, robot_state_obs)
-        assert int(model.last_infer_nfe) == k, f"expected nfe={k}, got {model.last_infer_nfe}"
-        print(f"infer K={k}: nfe={model.last_infer_nfe} ok")
+    for profile_on in (False, True):
+        model.enable_profile_inference(profile_on)
+        for k in (1, 2, 5, 10):
+            model.set_num_k_infer(k)
+            with torch.no_grad():
+                _ = model.infer_y(pcd, robot_state_obs)
+            assert int(model.last_infer_nfe) == k, (
+                f"profile={profile_on}: expected nfe={k}, got {model.last_infer_nfe}"
+            )
+            print(f"infer profile={profile_on} K={k}: nfe={model.last_infer_nfe} ok")
+    model.enable_profile_inference(False)
 
     for sched in ("uniform", "fm_exp"):
         model.set_momentum_meanflow_schedule(sched)

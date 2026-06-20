@@ -25,6 +25,7 @@ momentum_meanflow:
   interval_hidden_dim: 128
   lambda_correct: 1.0
   dt_min: 0.03125
+  start_case_ratio: 0.15
   momentum_meanflow_schedule: uniform
 
 diffusion_net:
