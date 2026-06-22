@@ -252,3 +252,45 @@ Sanity checks (local):
 Not yet measured:
 - full Dexter train (`dexter/run_pointflowmatch_open_fridge_momentum_meanflow.sbatch`);
 - K-sweep eval vs MeanFlow multistep / FM baseline / Shortcut after a trained checkpoint exists.
+
+## 2026-06-20 - MeanFlow inference schedule sweep (K=10)
+
+Context:
+- add optional `meanflow_schedule` for correct multi-step MeanFlow inference (training unchanged);
+- default remains `uniform` (same grid as legacy `i/K` multistep).
+
+Added:
+- `pfp/common/meanflow_utils.py` — `build_meanflow_time_grid()` schedules:
+  `uniform`, `fm_exp`, `reverse_exp`, `cosine`, `beta_2_2`, `beta_3_3`;
+- `MeanFlowPolicy.set_meanflow_schedule()` + grid-based multistep in `infer_y`;
+- `conf/model/meanflow.yaml` — `meanflow_schedule: uniform`;
+- `scripts/sweep_meanflow_schedules.py` — eval sweep at fixed K;
+- `validate_accuracy.py` — `+policy.meanflow_schedule=...` override.
+
+Smoke (local, N=2, K=10):
+- command: `scripts/sweep_meanflow_schedules.py --ckpt-name meanflow_open_fridge_1365 --schedules uniform,cosine --num-episodes 2 ...`
+- nfe/action=10 for both; outputs under `results/efficiency/smoke_meanflow_schedule/`.
+
+Full sweep started (background):
+- command: `scripts/sweep_meanflow_schedules.py --ckpt-name meanflow_open_fridge_1365 --k 10 --num-episodes 100 --seed 5678 --schedules uniform,fm_exp,reverse_exp,cosine,beta_2_2,beta_3_3`
+- log: `results/efficiency/meanflow_schedule_sweep_k10.log`
+- outputs: `results/efficiency/meanflow_schedule_sweep_k10.{csv,json,md}`
+
+## 2026-06-20 - Queued FM vs MeanFlow K-sweep (after schedule sweep)
+
+Context:
+- compare FM baseline vs correct multi-step MeanFlow at `K=1,2,5,8,10,15`;
+- must not run in parallel with schedule sweep.
+
+Added:
+- `scripts/sweep_fm_vs_meanflow_k.py` — unified sweep with sanity `nfe/action==K`;
+- `bash/run_night_fm_vs_meanflow_k_sweep.sh` — waits for `sweep_meanflow_schedules.py`, smoke then full run.
+
+Queue:
+- wrapper log: `results/efficiency/fm_vs_meanflow_k_sweep_queue.log`
+- smoke outputs: `results/efficiency/smoke_fm_vs_meanflow_k/`
+- full outputs: `results/efficiency/fm_vs_meanflow_k_sweep.{csv,json,md}`
+
+Checkpoints:
+- baseline: `1779122560-baseline-many-ckpts` / `ep1500`
+- meanflow multistep: `meanflow_open_fridge_1365` / `latest`, `meanflow_schedule=uniform`

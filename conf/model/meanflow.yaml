@@ -18,10 +18,12 @@ obs_encoder: ${backbone}
 
 interval_embed_dim: 64
 interval_hidden_dim: 128
+meanflow_schedule: uniform
 meanflow:
   enabled: true
   one_step: true
   multistep_infer: false
+  schedule: uniform
 
 diffusion_net:
   _partial_: true

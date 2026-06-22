@@ -17,6 +17,10 @@
 *.tar.gz
 *.zip
 
+# Credentials / secrets (never commit)
+dexter/creds.txt
+**/creds.txt
+
 # Записи политик, логи валидации, служебные логи
 /recordings/
 /results/

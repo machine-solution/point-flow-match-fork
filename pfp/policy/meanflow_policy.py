@@ -8,6 +8,7 @@ import torch.nn as nn
 from pfp import DEVICE
 from pfp.common.phase_utils import compute_phase_labels_torch_from_gripper
 from pfp.common.inference_profiling import blank_infer_y_profile, cuda_sync
+from pfp.common.meanflow_utils import MEANFLOW_INFER_SCHEDULES, build_meanflow_time_grid
 from pfp.policy.fm_policy import FMPolicy
 
 logger = logging.getLogger(__name__)
@@ -27,14 +28,22 @@ class MeanFlowPolicy(FMPolicy):
         interval_embed_dim: int = 64,
         interval_hidden_dim: int = 128,
         meanflow: dict | None = None,
+        meanflow_schedule: str = "uniform",
         **kwargs,
     ) -> None:
+        cfg = meanflow or {}
         super().__init__(*args, **kwargs)
         self.interval_embed_dim = int(interval_embed_dim)
         self.interval_hidden_dim = int(interval_hidden_dim)
-        self.meanflow_enabled = True if meanflow is None else bool(meanflow.get("enabled", True))
-        self.meanflow_one_step = True if meanflow is None else bool(meanflow.get("one_step", True))
-        self.meanflow_multistep_infer = False if meanflow is None else bool(meanflow.get("multistep_infer", False))
+        self.meanflow_enabled = True if meanflow is None else bool(cfg.get("enabled", True))
+        self.meanflow_one_step = True if meanflow is None else bool(cfg.get("one_step", True))
+        self.meanflow_multistep_infer = False if meanflow is None else bool(cfg.get("multistep_infer", False))
+        self.meanflow_schedule = str(meanflow_schedule or cfg.get("schedule", "uniform"))
+        if self.meanflow_schedule not in MEANFLOW_INFER_SCHEDULES:
+            raise ValueError(
+                f"Unknown meanflow_schedule={self.meanflow_schedule}. "
+                f"Expected one of {MEANFLOW_INFER_SCHEDULES}"
+            )
         self.sampler_mode = "meanflow_multistep" if self.meanflow_multistep_infer else "meanflow_one_step"
         self.meanflow_nfe: int = 0
         self.interval_mlp = nn.Sequential(
@@ -50,11 +59,12 @@ class MeanFlowPolicy(FMPolicy):
         if not self.meanflow_multistep_infer:
             self.num_k_infer = 1
         logger.info(
-            "[MeanFlow] enabled=%s one_step=%s multistep_infer=%s sampler_mode=%s num_k_infer=%d interval_embed_dim=%d "
+            "[MeanFlow] enabled=%s one_step=%s multistep_infer=%s schedule=%s sampler_mode=%s num_k_infer=%d interval_embed_dim=%d "
             "params_trainable(total=%d diffusion=%d obs_encoder=%d)",
             self.meanflow_enabled,
             self.meanflow_one_step,
             self.meanflow_multistep_infer,
+            self.meanflow_schedule,
             self.sampler_mode,
             self.num_k_infer,
             self.interval_embed_dim,
@@ -64,7 +74,8 @@ class MeanFlowPolicy(FMPolicy):
         )
         print(
             f"[MeanFlow] enabled={self.meanflow_enabled} one_step={self.meanflow_one_step} "
-            f"multistep_infer={self.meanflow_multistep_infer} sampler_mode={self.sampler_mode} "
+            f"multistep_infer={self.meanflow_multistep_infer} schedule={self.meanflow_schedule} "
+            f"sampler_mode={self.sampler_mode} "
             f"num_k_infer={self.num_k_infer} interval_embed_dim={self.interval_embed_dim}"
         )
         print(
@@ -83,6 +94,14 @@ class MeanFlowPolicy(FMPolicy):
             self.sampler_mode,
             int(self.num_k_infer),
         )
+        return
+
+    def set_meanflow_schedule(self, schedule: str) -> None:
+        schedule = str(schedule)
+        if schedule not in MEANFLOW_INFER_SCHEDULES:
+            raise ValueError(f"Unknown meanflow schedule: {schedule}")
+        self.meanflow_schedule = schedule
+        logger.info("[MeanFlow] set_meanflow_schedule=%s", schedule)
         return
 
     def set_num_k_infer(self, num_k_infer: int):
@@ -233,14 +252,22 @@ class MeanFlowPolicy(FMPolicy):
         k = int(self.num_k_infer) if self.meanflow_multistep_infer else 1
         if k <= 0:
             raise ValueError("num_k_infer must be >= 1")
+        grid = build_meanflow_time_grid(
+            k,
+            self.meanflow_schedule,
+            exp_scale=float(self.exp_scale or 4.0),
+            device=z.device,
+            dtype=z.dtype,
+        )
         traj = [z]
-        inv_k = 1.0 / float(k)
         if yprof is not None:
             cuda_sync()
             loop_t0 = time.perf_counter()
         for i in range(k):
-            r = torch.full((B, 1, 1), float(i) * inv_k, device=DEVICE, dtype=z.dtype)
-            t = torch.full((B, 1, 1), float(i + 1) * inv_k, device=DEVICE, dtype=z.dtype)
+            r_v = float(grid[i])
+            t_v = float(grid[i + 1])
+            r = torch.full((B, 1, 1), r_v, device=DEVICE, dtype=z.dtype)
+            t = torch.full((B, 1, 1), t_v, device=DEVICE, dtype=z.dtype)
             dt = t - r
             if self.phase_enabled:
                 assert phase_seq is not None
@@ -251,19 +278,18 @@ class MeanFlowPolicy(FMPolicy):
             if yprof is not None:
                 cuda_sync()
                 t_mlp0 = time.perf_counter()
-                global_cond = self._interval_global_cond(nx, r, t)
+            global_cond = self._interval_global_cond(nx, r, t)
+            if yprof is not None:
                 cuda_sync()
                 yprof["extra_mlp_ms"] += (time.perf_counter() - t_mlp0) * 1000.0
                 cuda_sync()
                 t_unet0 = time.perf_counter()
-                u_pred_full = self.diffusion_net(z_in, timesteps, global_cond=global_cond)
+            u_pred_full = self.diffusion_net(z_in, timesteps, global_cond=global_cond)
+            self.meanflow_nfe += 1
+            if yprof is not None:
                 cuda_sync()
                 yprof["unet_total_ms"] += (time.perf_counter() - t_unet0) * 1000.0
                 yprof["nfe"] += 1.0
-            else:
-                global_cond = self._interval_global_cond(nx, r, t)
-                u_pred_full = self.diffusion_net(z_in, timesteps, global_cond=global_cond)
-            self.meanflow_nfe += 1
             u_pred = self._slice_velocity(u_pred_full)
             z = z + dt * u_pred
             traj.append(z)

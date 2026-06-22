@@ -76,6 +76,9 @@ def main(cfg: OmegaConf):
     if bool(cfg.policy.get("meanflow_multistep_infer", False)) and hasattr(policy, "set_meanflow_multistep_infer"):
         policy.set_meanflow_multistep_infer(True)
         policy.set_num_k_infer(int(cfg.policy.get("num_k_infer", 1)))
+    mf_schedule = cfg.policy.get("meanflow_schedule", None)
+    if mf_schedule is not None and hasattr(policy, "set_meanflow_schedule"):
+        policy.set_meanflow_schedule(str(mf_schedule))
     mm_schedule = cfg.policy.get("momentum_meanflow_schedule", None)
     if mm_schedule is not None and hasattr(policy, "set_momentum_meanflow_schedule"):
         policy.set_momentum_meanflow_schedule(str(mm_schedule))
@@ -92,6 +95,7 @@ def main(cfg: OmegaConf):
             f"[model] meanflow.enabled={getattr(policy, 'meanflow_enabled', None)} "
             f"one_step={getattr(policy, 'meanflow_one_step', None)} "
             f"multistep_infer={getattr(policy, 'meanflow_multistep_infer', None)} "
+            f"schedule={getattr(policy, 'meanflow_schedule', None)} "
             f"sampler_mode={getattr(policy, 'sampler_mode', None)} "
             f"meanflow_nfe={getattr(policy, 'meanflow_nfe', None)}"
         )
@@ -124,6 +128,11 @@ def main(cfg: OmegaConf):
         "mean_episode_time_s": float(diagnostics.get("mean_episode_time_s", 0.0)),
         "policy_inference_diagnostics": diagnostics.get("policy_inference_diagnostics", {}),
         "sampler_mode": str(getattr(policy, "sampler_mode", policy.__class__.__name__)),
+        "meanflow_schedule": str(getattr(policy, "meanflow_schedule", None)),
+        "meanflow_multistep_infer": bool(getattr(policy, "meanflow_multistep_infer", False)),
+        "num_k_infer": int(getattr(policy, "num_k_infer", cfg.policy.get("num_k_infer", 0))),
+        "flow_schedule": str(getattr(policy, "flow_schedule", None)),
+        "exp_scale": float(getattr(policy, "exp_scale", 0.0) or 0.0),
         "phase_conditioning": str(getattr(cfg, "phase_conditioning", None)),
         "phase_prediction": str(getattr(cfg, "phase_prediction", None)),
         "episodes": [
