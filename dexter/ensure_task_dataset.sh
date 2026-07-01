@@ -31,9 +31,10 @@ if [[ -f "${BUNDLE}" ]]; then
   exit 0
 fi
 
-if [[ "${TASK_NAME}" == "open_fridge" ]]; then
-  echo "=== Downloading open_fridge from Yandex Disk ==="
-  bash dexter/download_dataset.sh
+public_key="$(pfp_yandex_url_for_task "${TASK_NAME}" 2>/dev/null)" || public_key=""
+if [[ -n "${public_key}" ]]; then
+  echo "=== Downloading ${TASK_NAME} from Yandex Disk ==="
+  bash dexter/download_dataset.sh "${TASK_NAME}"
   exit 0
 fi
 

@@ -6,16 +6,18 @@
 
 Все sbatch-скрипты `dexter/run_pointflowmatch_open_fridge*.sbatch` принимают переменную окружения **`TASK_NAME`** (Hydra-override `task_name=...`). По умолчанию **`open_fridge`**.
 
-| `task_name` | Архив демо (корень репо) |
-|-------------|--------------------------|
-| `unplug_charger` | `demos_unplug_charger_sim.tar.gz` |
-| `close_door` | `demos_close_door_sim.tar.gz` |
-| `open_box` | `demos_open_box_sim.tar.gz` |
-| `open_fridge` | `demos_open_fridge_sim.tar.gz` (+ Yandex: `bash dexter/download_dataset.sh`) |
-| `take_frame_off_hanger` | `demos_take_frame_off_hanger_sim.tar.gz` |
-| `open_oven` | `demos_open_oven_sim.tar.gz` |
-| `put_books_on_bookshelf` | `demos_put_books_on_bookshelf_sim.tar.gz` |
-| `take_shoes_out_of_box` | `demos_take_shoes_out_of_box_sim.tar.gz` |
+| `task_name` | Я.Диск |
+|-------------|--------|
+| `unplug_charger` | https://disk.yandex.ru/d/U4icXHaV6LsAyg |
+| `close_door` | https://disk.yandex.ru/d/_yhpQY_xSnZIBw |
+| `open_box` | https://disk.yandex.ru/d/MNVtWFTXgsmyLw |
+| `open_fridge` | https://disk.yandex.ru/d/Ssr_BffZItISOg |
+| `take_frame_off_hanger` | https://disk.yandex.ru/d/SHSiu0K2YF8ixQ |
+| `open_oven` | https://disk.yandex.ru/d/NrysegZdYg8OhQ |
+| `put_books_on_bookshelf` | https://disk.yandex.ru/d/VwHJHr_9JVdp-Q |
+| `take_shoes_out_of_box` | https://disk.yandex.ru/d/8mhtToS_WpgXEQ |
+
+Скачать: `bash dexter/download_dataset.sh [task_name ...]` (без аргументов — все 8).
 
 Данные после распаковки: `demos/sim/<task_name>/{train,valid}` (100 + 10 эпизодов). Скрипт `dexter/ensure_task_dataset.sh` вызывается из sbatch автоматически.
 
@@ -132,7 +134,7 @@ python -c "import diffusion_policy; import pfp; print('OK')"
 
 #### 2. Загрузка датасетов
 
-**`open_fridge`** — можно скачать с Я.Диска (~4.3 ГБ):
+**Все 8 задач с Я.Диска** (без аргументов — качает всё по очереди):
 
 ```bash
 cd ~/point_flow_match/PointFlowMatch
@@ -140,12 +142,21 @@ bash dexter/download_dataset.sh
 # повторно: bash dexter/download_dataset.sh --force
 ```
 
-**Любая из 8 задач** — положи `demos_<task_name>_sim.tar.gz` в корень репо и распакуй (или sbatch сам вызовет `dexter/ensure_task_dataset.sh`):
+**Одна задача** (по умолчанию для холодильника — скопировать как есть):
 
 ```bash
-cd ~/point_flow_match/PointFlowMatch
+bash dexter/download_dataset.sh open_fridge
+bash dexter/download_dataset.sh close_door
+bash dexter/download_dataset.sh open_box unplug_charger   # несколько задач
+bash dexter/download_dataset.sh --list                    # URL всех шаров
+```
+
+Ссылки вшиты в `dexter/yandex_dataset_urls.sh` (алиасы: `unplug`, `put_books`, `take_shoes`, `take_frame`).
+
+**Локальный архив** — положи `demos_<task_name>_sim.tar.gz` в корень репо (sbatch сам распакует через `dexter/ensure_task_dataset.sh`):
+
+```bash
 tar -xzf demos_open_box_sim.tar.gz    # → demos/sim/open_box/{train,valid}
-# проверка:
 bash dexter/ensure_task_dataset.sh open_box
 ```
 
@@ -325,7 +336,7 @@ tail -f logs/pfm_open_fridge_pre_<JOB>.out
 
 Скрипт `run_pointflowmatch_open_fridge.sbatch`:
 - активирует окружение `./pfp-train-env`,
-- при отсутствии данных вызывает `dexter/download_dataset.sh`,
+- при отсутствии данных вызывает `dexter/ensure_task_dataset.sh` (Yandex для всех 8 задач),
 - запускает обучение:
   - `scripts/train.py task_name="${TASK_NAME}" +experiment=pointflowmatch`,
 - по окончании копирует чекпоинты из `ckpt/` в
@@ -354,7 +365,7 @@ pip install -e . --no-deps
 cd ~/point_flow_match/PointFlowMatch
 git pull
 conda activate ./pfp-train-env
-bash dexter/download_dataset.sh                 # open_fridge only (Yandex)
+bash dexter/download_dataset.sh open_fridge       # одна задача; без аргументов — все 8
 # другие задачи: tar -xzf demos_<task>_sim.tar.gz
 bash dexter/download_open_fridge_two_phase.sh   # pre + post zarr для двухфазного обучения
 TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge.sbatch
