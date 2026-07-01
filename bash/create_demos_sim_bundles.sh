@@ -32,8 +32,8 @@ bundle_task() {
   local task_dir="${REPO_ROOT}/demos/sim/${task}"
   local archive="${REPO_ROOT}/demos_${task}_sim.tar.gz"
 
-  if [[ ! -d "${task_dir}/train" || ! -d "${task_dir}/valid" ]]; then
-    echo "[error] missing train/valid in ${task_dir}"
+  if [[ ! -d "${task_dir}/train/data" || ! -d "${task_dir}/train/meta" || ! -d "${task_dir}/valid/data" || ! -d "${task_dir}/valid/meta" ]]; then
+    echo "[error] missing zarr train/valid in ${task_dir} (need data/ + meta/)" >&2
     return 1
   fi
 
@@ -53,7 +53,11 @@ bundle_task() {
 
   echo "[verify] $archive"
   if ! tar -tf "$archive" "demos/sim/${task}/train/data" &>/dev/null; then
-    echo "[error] bundle missing expected paths"
+    echo "[error] bundle missing demos/sim/${task}/train/data" >&2
+    return 1
+  fi
+  if ! tar -tf "$archive" "demos/sim/${task}/valid/data" &>/dev/null; then
+    echo "[error] bundle missing demos/sim/${task}/valid/data" >&2
     return 1
   fi
 
@@ -62,10 +66,20 @@ bundle_task() {
 }
 
 cd "$REPO_ROOT"
+FAILED=0
 for task in "${TASKS[@]}"; do
   echo "--- $task $(date -Is) ---"
-  bundle_task "$task"
+  if ! bundle_task "$task"; then
+    echo "[fatal] bundle failed for ${task}" >&2
+    FAILED=1
+    break
+  fi
 done
+
+if [[ "$FAILED" -ne 0 ]]; then
+  echo "=== create_demos_sim_bundles aborted $(date -Is) ===" >&2
+  exit 1
+fi
 
 echo "=== create_demos_sim_bundles finished $(date -Is) ==="
 ls -lh "${REPO_ROOT}"/demos_*_sim.tar.gz

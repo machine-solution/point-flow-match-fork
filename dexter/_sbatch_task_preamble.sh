@@ -5,5 +5,5 @@
 
 TASK_NAME="${TASK_NAME:-open_fridge}"
 echo "=== task_name (TASK_NAME): ${TASK_NAME} ==="
-bash dexter/ensure_task_dataset.sh
+bash dexter/ensure_task_dataset.sh "${TASK_NAME}"
 export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
