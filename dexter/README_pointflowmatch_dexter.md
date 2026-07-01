@@ -468,11 +468,11 @@ python scripts/validate_accuracy.py policy.ckpt_name=<run_name> env_runner.num_e
   TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
   ```
 
-  Этот скрипт запускает:
+  Этот скрипт запускает (с `task_name="${TASK_NAME}"`, по умолчанию `open_fridge`):
 
   ```bash
   python scripts/train.py \
-      task_name=open_fridge \
+      task_name="${TASK_NAME}" \
       +experiment=pointflowmatch_gripper_weighted \
       dataloader.num_workers=8 \
       dataloader.batch_size=128 \

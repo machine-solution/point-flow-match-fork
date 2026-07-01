@@ -164,7 +164,7 @@ python scripts/train.py log_wandb=True dataloader.num_workers=8 task_name=open_f
 | `unplug_charger` | `close_door` | `open_box` | `open_fridge` |
 | `take_frame_off_hanger` | `open_oven` | `put_books_on_bookshelf` | `take_shoes_out_of_box` |
 
-Demos: `demos/sim/<task_name>/{train,valid}` or extract `demos_<task_name>_sim.tar.gz` from the repo root.
+Demos: `demos/sim/<task_name>/{train,valid}`, extract `demos_<task_name>_sim.tar.gz`, or `bash dexter/download_dataset.sh [task_name ...]` (no args = all 8 tasks).
 
 Valid experiment names are the following, and they represent the different baselines we tested: `adaflow`, `diffusion_policy`, `dp3`, `pointflowmatch`, `pointflowmatch_images`, `pointflowmatch_ddim`, `pointflowmatch_so3`.
 
@@ -234,26 +234,36 @@ PYTHONPATH=../diffusion_policy python scripts/debug_phase_forward.py --phase ena
 PYTHONPATH=../diffusion_policy python scripts/debug_phase_forward.py --phase disabled
 ```
 
-### `open_fridge` datasets: commands (cluster / VM)
+### Paper task datasets: download commands
 
 From the **repository root** (needs network, `python3`, `tar`):
 
 ```bash
-# Baseline PointFlowMatch: train + valid (~4.3 GB one archive)
+# All 8 paper tasks from Yandex Disk (sequential download)
 bash dexter/download_dataset.sh
 
-# Two-phase policies: train_pre_grasp + train_post_grasp (two archives; large total size)
+# Single task (default example: open_fridge)
+bash dexter/download_dataset.sh open_fridge
+bash dexter/download_dataset.sh close_door open_box
+
+# List public share URLs
+bash dexter/download_dataset.sh --list
+```
+
+Re-download: append `--force`. On Slurm clusters, run on a login node or interactive session.
+
+**Two-phase `open_fridge` only** (pre/post grasp splits):
+
+```bash
 bash dexter/download_open_fridge_two_phase.sh
 ```
 
-Re-download: append `--force` to either script. On Slurm clusters, run these on a login node or an interactive allocation, not as an unattended one-line `sbatch` unless you know the job will finish (downloads can take a long time).
-
 | Goal | Result on disk | `valid`? |
 |------|----------------|----------|
-| Baseline (`run_pointflowmatch_open_fridge.sbatch`, etc.) | `demos/sim/open_fridge/train`, `valid` | yes |
-| Two-phase (`train_open_fridge_*_grasp` configs, `two_layers_planning/sbatch/…`) | `train_pre_grasp`, `train_post_grasp` | no |
+| Baseline (`run_pointflowmatch_open_fridge*.sbatch`, any `TASK_NAME`) | `demos/sim/<task>/train`, `valid` | yes |
+| Two-phase (`train_open_fridge_*_grasp`) | `train_pre_grasp`, `train_post_grasp` | no |
 
-Alternatively: collect demos with `collect_demos.py`, or split `train` locally with `two_layers_planning/split_dataset_at_first_grasp.py` instead of `download_open_fridge_two_phase.sh`. More detail: **`two_layers_planning/README.md`**, **`dexter/README_pointflowmatch_dexter.md`** §2.
+Alternatively: collect demos with `bash/collect_data.sh`, or split `train` with `two_layers_planning/split_dataset_at_first_grasp.py`. Details: **`two_layers_planning/README.md`**, **`dexter/README_pointflowmatch_dexter.md`** §2.
 
 ## Running training on Dexter (DGX A100)
 
@@ -261,13 +271,12 @@ In the `dexter/` folder you can find helper files for running PointFlowMatch tra
 
 - `dexter/instruction.md` – short Russian introduction to Slurm on Dexter (queues, `sbatch`, how to read `.out/.err` logs).
 - `dexter/pfp_train_env.yml` – Conda environment for offline training (no CoppeliaSim / RLBench required).
-- `dexter/run_pointflowmatch_open_fridge.sbatch` – example Slurm script for training the PointFlowMatch baseline on the `open_fridge` task using existing demos.
-- `dexter/run_pointflowmatch_open_fridge_phase_prediction.sbatch` – Slurm training for **FMPolicy + learned phase head** (`phase_conditioning=enabled`, `phase_prediction=enabled`).
-- `dexter/run_pointflowmatch_open_fridge_momentum_meanflow.sbatch` – Slurm training for **Momentum / Self-Correcting MeanFlow** (`+experiment=pointflowmatch_momentum_meanflow`).
-- `dexter/verify_training_setup.py` – quick check that Hydra instantiates `FMPolicy` with the intended phase settings (no GPU/dataset).
-- `dexter/download_dataset.sh` / `dexter/download_open_fridge_two_phase.sh` – download baseline or two-phase zarr from Yandex Disk (run from repo root).
-- `dexter/run_open_fridge_pre_grasp.sbatch`, `dexter/run_open_fridge_post_grasp.sbatch`, `dexter/run_open_fridge_two_phase_chain.sbatch` – Slurm training for two-phase `open_fridge` on Dexter (conda `pfp-train-env`).
+- `dexter/run_pointflowmatch_open_fridge*.sbatch` – Slurm scripts for baseline / MeanFlow / phase / etc.; set **`TASK_NAME=open_fridge`** (default) or any other paper task.
+- `dexter/download_dataset.sh` – download demo bundles from Yandex Disk (`bash dexter/download_dataset.sh` = all 8 tasks; `bash dexter/download_dataset.sh open_fridge` = one task).
+- `dexter/download_open_fridge_two_phase.sh` – two-phase pre/post zarr for `open_fridge` only.
 - `two_layers_planning/README.md` – two-phase workflow, split script, and **local** `.venv` sbatch under `two_layers_planning/sbatch/`.
+- `dexter/verify_training_setup.py` – quick check that Hydra instantiates `FMPolicy` with the intended phase settings (no GPU/dataset).
+- `dexter/run_open_fridge_pre_grasp.sbatch`, `dexter/run_open_fridge_post_grasp.sbatch`, `dexter/run_open_fridge_two_phase_chain.sbatch` – two-phase `open_fridge` only.
 
 Typical workflow on Dexter:
 
@@ -278,13 +287,11 @@ cd PointFlowMatch
 # Create training environment locally in the repo
 conda env create -f dexter/pfp_train_env.yml -p ./pfp-train-env
 
-# Submit training job (from repo root)
-sbatch dexter/run_pointflowmatch_open_fridge.sbatch
-
-# Momentum / Self-Correcting MeanFlow (open_fridge, 1500 epochs, milestone checkpoints)
-sbatch dexter/run_pointflowmatch_open_fridge_momentum_meanflow.sbatch
+# Submit training (default task: open_fridge; change TASK_NAME for other paper tasks)
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_momentum_meanflow.sbatch
 ```
 
-For **`dexter/run_pointflowmatch_open_fridge.sbatch`**, put data under `demos/sim/open_fridge/train` and `valid` (the sbatch may call `bash dexter/download_dataset.sh` if missing). For **two-phase** training on Dexter, run `bash dexter/download_open_fridge_two_phase.sh`, then e.g. `PRE=$(sbatch --parsable dexter/run_open_fridge_pre_grasp.sbatch)` and `sbatch --dependency=afterok:"$PRE" dexter/run_open_fridge_post_grasp.sbatch`, or use `dexter/run_open_fridge_two_phase_chain.sbatch` for one long job. See **`dexter/README_pointflowmatch_dexter.md`** §3.
+All `dexter/run_pointflowmatch_open_fridge*.sbatch` scripts accept **`TASK_NAME`** (Hydra `task_name=...`). Data is fetched automatically via `dexter/ensure_task_dataset.sh` (Yandex download for all 8 paper tasks). For **two-phase** `open_fridge`, run `bash dexter/download_open_fridge_two_phase.sh`, then `dexter/run_open_fridge_pre_grasp.sbatch` / `post_grasp.sbatch`. Full guide: **`dexter/README_pointflowmatch_dexter.md`**.
 
 Large training data and checkpoints are **not** committed to this repository (see `.gitignore`); they should be stored locally on the cluster or downloaded separately.
