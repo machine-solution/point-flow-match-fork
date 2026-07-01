@@ -4,11 +4,13 @@ set -euo pipefail
 # Dexter submission wrapper for Shortcut PointFlowMatch training.
 # Usage:
 #   bash bash/dexter_train_shortcut_flow.sh
-#   TASK_NAME=open_fridge RUN_NAME=shortcut_open_fridge bash bash/dexter_train_shortcut_flow.sh
+#   bash bash/dexter_train_shortcut_flow.sh open_fridge
+#   TASK_NAME=open_box RUN_NAME=shortcut_open_box bash bash/dexter_train_shortcut_flow.sh
 
-TASK_NAME="${TASK_NAME:-open_fridge}"
+TASK_NAME="${1:-${TASK_NAME:-open_fridge}}"
+if [[ $# -gt 0 ]]; then shift; fi
 EXPERIMENT="${EXPERIMENT:-pointflowmatch_shortcut}"
-RUN_NAME="${RUN_NAME:-shortcut_open_fridge}"
+RUN_NAME="${RUN_NAME:-shortcut_${TASK_NAME}}"
 NUM_GPUS="${NUM_GPUS:-1}"
 PARTITION="${PARTITION:-gpu}"
 TIME="${TIME:-24:00:00}"

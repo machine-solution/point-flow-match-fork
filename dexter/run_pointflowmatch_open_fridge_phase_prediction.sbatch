@@ -7,7 +7,8 @@
 #   phase_prediction=enabled    -> phase_head + CE aux loss; flow uses current GT phase repeated (train)
 #
 # Usage (from repo root):
-#   sbatch dexter/run_pointflowmatch_open_fridge_phase_prediction.sbatch
+#   TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_phase_prediction.sbatch
+#   TASK_NAME=open_box sbatch dexter/run_pointflowmatch_open_fridge_phase_prediction.sbatch
 #
 #SBATCH --job-name=pfm_open_fridge_ph_pred
 #SBATCH --output=logs/pfm_open_fridge_ph_pred_%j.out
@@ -41,16 +42,10 @@ export CUDA_LAUNCH_BLOCKING=1
 echo "=== nvidia-smi (before training) ==="
 nvidia-smi
 
-export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
+TASK_NAME="${TASK_NAME:-open_fridge}"
+# shellcheck source=dexter/_sbatch_task_preamble.sh
+source dexter/_sbatch_task_preamble.sh
 
-TRAIN_DIR="demos/sim/open_fridge/train"
-VALID_DIR="demos/sim/open_fridge/valid"
-if [ ! -d "${TRAIN_DIR}" ] || [ ! -d "${VALID_DIR}" ]; then
-    echo "=== Downloading dataset from Yandex Disk ==="
-    bash dexter/download_dataset.sh
-else
-    echo "=== Dataset already present, skipping download ==="
-fi
 
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
@@ -60,14 +55,14 @@ df -h . /tmp 2>/dev/null || df -h .
 echo "=== Verify Hydra config resolves to FMPolicy + phase_prediction ==="
 python dexter/verify_training_setup.py \
     --overrides \
-    task_name=open_fridge \
+    task_name="${TASK_NAME}" \
     +experiment=pointflowmatch \
     phase_conditioning=enabled \
     phase_prediction=enabled
 
 echo "=== Starting training (learned phase, milestone checkpoints) ==="
 python scripts/train.py \
-    task_name=open_fridge \
+    task_name="${TASK_NAME}" \
     +experiment=pointflowmatch \
     checkpoint_schedule=milestones_1500 \
     phase_conditioning=enabled \

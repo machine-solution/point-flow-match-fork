@@ -4,11 +4,13 @@ set -euo pipefail
 # Dexter submission wrapper for MeanFlow training.
 # Usage:
 #   bash bash/dexter_train_meanflow.sh
-#   TASK_NAME=open_fridge RUN_NAME=my_meanflow_run bash bash/dexter_train_meanflow.sh
+#   bash bash/dexter_train_meanflow.sh open_fridge
+#   TASK_NAME=open_box RUN_NAME=my_meanflow_run bash bash/dexter_train_meanflow.sh
 
-TASK_NAME="${TASK_NAME:-open_fridge}"
+TASK_NAME="${1:-${TASK_NAME:-open_fridge}}"
+if [[ $# -gt 0 ]]; then shift; fi
 EXPERIMENT="${EXPERIMENT:-pointflowmatch_meanflow}"
-RUN_NAME="${RUN_NAME:-}"
+RUN_NAME="${RUN_NAME:-meanflow_${TASK_NAME}}"
 NUM_GPUS="${NUM_GPUS:-1}"
 PARTITION="${PARTITION:-gpu}"
 TIME="${TIME:-24:00:00}"

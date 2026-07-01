@@ -151,13 +151,20 @@ Output is written to `demos/sim/open_fridge/train` and `demos/sim/open_fridge/va
 bash bash/collect_data.sh
 ```
 
-Then, you can train your own policies:
+Then, you can train your own policies (default task: `open_fridge`; change `task_name` for other paper tasks):
 
 ```bash
-python scripts/train.py log_wandb=True dataloader.num_workers=8 task_name=<task_name> +experiment=<experiment_name>
+python scripts/train.py log_wandb=True dataloader.num_workers=8 task_name=open_fridge +experiment=pointflowmatch
 ```
 
-Valid task names are all those supported by RLBench. In this work, we used the following tasks: `unplug_charger`, `close_door`, `open_box`, `open_fridge`, `take_frame_off_hanger`, `open_oven`, `put_books_on_bookshelf`, `take_shoes_out_of_box`.
+**Paper task names** (`task_name=...`):
+
+| | | | |
+|---|---|---|---|
+| `unplug_charger` | `close_door` | `open_box` | `open_fridge` |
+| `take_frame_off_hanger` | `open_oven` | `put_books_on_bookshelf` | `take_shoes_out_of_box` |
+
+Demos: `demos/sim/<task_name>/{train,valid}` or extract `demos_<task_name>_sim.tar.gz` from the repo root.
 
 Valid experiment names are the following, and they represent the different baselines we tested: `adaflow`, `diffusion_policy`, `dp3`, `pointflowmatch`, `pointflowmatch_images`, `pointflowmatch_ddim`, `pointflowmatch_so3`.
 

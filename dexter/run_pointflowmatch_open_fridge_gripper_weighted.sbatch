@@ -3,7 +3,8 @@
 # Slurm job: train PointFlowMatch (gripper-weighted loss) on the open_fridge task.
 #
 # Usage (from repo root):
-#   sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
+#   TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
+#   TASK_NAME=open_box sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
 #
 
 #SBATCH --job-name=pfm_open_fridge_gripw
@@ -38,17 +39,9 @@ export CUDA_LAUNCH_BLOCKING=1
 echo "=== nvidia-smi (before training) ==="
 nvidia-smi
 
-export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
-
-TRAIN_DIR="demos/sim/open_fridge/train"
-VALID_DIR="demos/sim/open_fridge/valid"
-
-if [ ! -d "${TRAIN_DIR}" ] || [ ! -d "${VALID_DIR}" ]; then
-    echo "=== Downloading dataset from Yandex Disk ==="
-    bash dexter/download_dataset.sh
-else
-    echo "=== Dataset already present, skipping download ==="
-fi
+TASK_NAME="${TASK_NAME:-open_fridge}"
+# shellcheck source=dexter/_sbatch_task_preamble.sh
+source dexter/_sbatch_task_preamble.sh
 
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
@@ -62,7 +55,7 @@ echo "=== Starting training (gripper-weighted loss) ==="
 PFP_PHASE_CONDITIONING="${PFP_PHASE_CONDITIONING:-disabled}"
 
 python scripts/train.py \
-    task_name=open_fridge \
+    task_name="${TASK_NAME}" \
     +experiment=pointflowmatch_gripper_weighted \
     checkpoint_schedule=milestones_1500 \
     phase_conditioning="${PFP_PHASE_CONDITIONING}" \

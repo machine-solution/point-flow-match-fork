@@ -3,7 +3,8 @@
 # Slurm job: train PointFlowMatch on the open_fridge task.
 #
 # Usage (from repo root):
-#   sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+#   TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+#   TASK_NAME=open_box sbatch dexter/run_pointflowmatch_open_fridge.sbatch
 #
 # Prerequisites (run once on Dexter from the repo root):
 #   1. Clone the repo (and sibling diffusion_policy repo next to it).
@@ -11,8 +12,8 @@
 #        conda env create -f dexter/pfp_train_env.yml -p ./pfp-train-env
 #        conda activate ./pfp-train-env
 #        pip install -e ../diffusion_policy
-#   3. Either place demos under demos/sim/open_fridge/{train,valid}
-#      OR let this script download them automatically (dexter/download_dataset.sh).
+#   3. Place demos under demos/sim/<task_name>/{train,valid}
+#      OR copy demos_<task_name>_sim.tar.gz to repo root (auto-extract in sbatch).
 #
 # Checkpoints are saved to ckpt/<run_name>/ inside the repo root.
 # After training, they are also copied to CKPT_BACKUP_DIR (see below).
@@ -57,19 +58,9 @@ export CUDA_LAUNCH_BLOCKING=1
 echo "=== nvidia-smi (before training) ==="
 nvidia-smi
 
-# Ensure sibling repo is importable (editable install can fail to add it on some systems)
-export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
-
-# ── Dataset ──────────────────────────────────────────────────────────────────
-TRAIN_DIR="demos/sim/open_fridge/train"
-VALID_DIR="demos/sim/open_fridge/valid"
-
-if [ ! -d "${TRAIN_DIR}" ] || [ ! -d "${VALID_DIR}" ]; then
-    echo "=== Downloading dataset from Yandex Disk ==="
-    bash dexter/download_dataset.sh
-else
-    echo "=== Dataset already present, skipping download ==="
-fi
+TASK_NAME="${TASK_NAME:-open_fridge}"
+# shellcheck source=dexter/_sbatch_task_preamble.sh
+source dexter/_sbatch_task_preamble.sh
 
 # ── Training ─────────────────────────────────────────────────────────────────
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
@@ -80,7 +71,7 @@ echo "=== Starting training (baseline, milestone checkpoints) ==="
 # Checkpoints at epochs 300,600,900,1200,1500 only (see conf/checkpoint_schedule/milestones_1500.yaml).
 PFP_PHASE_CONDITIONING="${PFP_PHASE_CONDITIONING:-disabled}"
 python scripts/train.py \
-    task_name=open_fridge \
+    task_name="${TASK_NAME}" \
     +experiment=pointflowmatch \
     checkpoint_schedule=milestones_1500 \
     phase_conditioning="${PFP_PHASE_CONDITIONING}" \

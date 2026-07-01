@@ -1,6 +1,42 @@
 ### Настройка PointFlowMatch на Dexter (DGX A100)
 
-Этот файл описывает полный путь от пустой директории до запуска обучения `open_fridge` на Dexter.
+Этот файл описывает полный путь от пустой директории до запуска обучения на **любой из 8 задач** из статьи (по умолчанию — `open_fridge`).
+
+#### Задачи (`task_name` / `TASK_NAME`)
+
+Все sbatch-скрипты `dexter/run_pointflowmatch_open_fridge*.sbatch` принимают переменную окружения **`TASK_NAME`** (Hydra-override `task_name=...`). По умолчанию **`open_fridge`**.
+
+| `task_name` | Архив демо (корень репо) |
+|-------------|--------------------------|
+| `unplug_charger` | `demos_unplug_charger_sim.tar.gz` |
+| `close_door` | `demos_close_door_sim.tar.gz` |
+| `open_box` | `demos_open_box_sim.tar.gz` |
+| `open_fridge` | `demos_open_fridge_sim.tar.gz` (+ Yandex: `bash dexter/download_dataset.sh`) |
+| `take_frame_off_hanger` | `demos_take_frame_off_hanger_sim.tar.gz` |
+| `open_oven` | `demos_open_oven_sim.tar.gz` |
+| `put_books_on_bookshelf` | `demos_put_books_on_bookshelf_sim.tar.gz` |
+| `take_shoes_out_of_box` | `demos_take_shoes_out_of_box_sim.tar.gz` |
+
+Данные после распаковки: `demos/sim/<task_name>/{train,valid}` (100 + 10 эпизодов). Скрипт `dexter/ensure_task_dataset.sh` вызывается из sbatch автоматически.
+
+**Пример (холодильник — скопировать как есть):**
+
+```bash
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+```
+
+**Другая задача:** замени только `TASK_NAME`, sbatch-файл тот же:
+
+```bash
+TASK_NAME=open_box sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+```
+
+Локально (без Slurm):
+
+```bash
+python dexter/train_pointflowmatch_open_fridge.py --task-name open_fridge
+python scripts/train.py task_name=open_fridge +experiment=pointflowmatch launch_eval_after_train=false
+```
 
 #### 0. Подготовка директории и репозиториев
 
@@ -94,11 +130,9 @@ python -c "import diffusion_policy; import pfp; print('OK')"
 > conda install -c pytorch3d pytorch3d
 > ```
 
-#### 2. Загрузка датасетов `open_fridge`
+#### 2. Загрузка датасетов
 
-Всё качается **командами из корня репозитория** (нужны `python3`, `tar`, сеть). На Dexter делай это на **login-ноде или в интерактивной сессии** (`srun --pty bash` / выделенная задача), а не внутри короткого `sbatch` без интерактива — иначе неудобно следить за прогрессом.
-
-**Baseline — один архив `train` + `valid` (~4.3 ГБ):**
+**`open_fridge`** — можно скачать с Я.Диска (~4.3 ГБ):
 
 ```bash
 cd ~/point_flow_match/PointFlowMatch
@@ -106,7 +140,16 @@ bash dexter/download_dataset.sh
 # повторно: bash dexter/download_dataset.sh --force
 ```
 
-**Двухфазное обучение — два архива `train_pre_grasp` + `train_post_grasp` (~2.5 + ~1.5 ГБ, суммарно больше места чем только baseline):**
+**Любая из 8 задач** — положи `demos_<task_name>_sim.tar.gz` в корень репо и распакуй (или sbatch сам вызовет `dexter/ensure_task_dataset.sh`):
+
+```bash
+cd ~/point_flow_match/PointFlowMatch
+tar -xzf demos_open_box_sim.tar.gz    # → demos/sim/open_box/{train,valid}
+# проверка:
+bash dexter/ensure_task_dataset.sh open_box
+```
+
+**Двухфазное обучение (только `open_fridge`)** — два архива `train_pre_grasp` + `train_post_grasp`:
 
 ```bash
 cd ~/point_flow_match/PointFlowMatch
@@ -145,7 +188,7 @@ bash dexter/download_open_fridge_two_phase.sh --stable3
 ```bash
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
-sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge.sbatch
 ```
 
 **Вариант с весами вокруг смены гриппера:**
@@ -153,7 +196,7 @@ sbatch dexter/run_pointflowmatch_open_fridge.sbatch
 ```bash
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
-sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
 ```
 
 **Phase‑Conditioned Single Model (одна shared модель с phase token, без hard switch):**
@@ -161,7 +204,7 @@ sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
 ```bash
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
-sbatch dexter/run_pointflowmatch_open_fridge_phase_conditioned.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_phase_conditioned.sbatch
 ```
 
 **Phase‑Conditioned + gripper‑weighted loss:**
@@ -169,7 +212,7 @@ sbatch dexter/run_pointflowmatch_open_fridge_phase_conditioned.sbatch
 ```bash
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
-sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted_phase_conditioned.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted_phase_conditioned.sbatch
 ```
 
 **Learned phase prediction (одна модель FMPolicy + `phase_head`, как в `pfp/policy/fm_policy.py`):**
@@ -180,13 +223,13 @@ sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted_phase_conditioned.
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
 
-sbatch dexter/run_pointflowmatch_open_fridge_phase_prediction.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_phase_prediction.sbatch
 ```
 
 Вариант с gripper-weighted loss:
 
 ```bash
-sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted_phase_prediction.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted_phase_prediction.sbatch
 ```
 
 Локально (без Slurm), из корня репо:
@@ -201,7 +244,7 @@ python dexter/train_pointflowmatch_open_fridge.py \
 ```bash
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
-sbatch dexter/run_pointflowmatch_open_fridge_meanflow.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_meanflow.sbatch
 ```
 
 **MeanFlow + Temporal Transformer (архитектурный эксперимент, готовые команды):**
@@ -210,7 +253,7 @@ sbatch dexter/run_pointflowmatch_open_fridge_meanflow.sbatch
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
 
-sbatch dexter/run_pointflowmatch_open_fridge_meanflow_transformer.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_meanflow_transformer.sbatch
 ```
 
 **Shortcut Flow (архитектурный эксперимент, готовый sbatch):**
@@ -219,7 +262,7 @@ sbatch dexter/run_pointflowmatch_open_fridge_meanflow_transformer.sbatch
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
 
-sbatch dexter/run_pointflowmatch_open_fridge_shortcut.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_shortcut.sbatch
 ```
 
 **StepConditionedMeanFlow (новая unified-модель, готовый sbatch):**
@@ -228,7 +271,7 @@ sbatch dexter/run_pointflowmatch_open_fridge_shortcut.sbatch
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
 
-sbatch dexter/run_pointflowmatch_open_fridge_step_conditioned_meanflow.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_step_conditioned_meanflow.sbatch
 ```
 
 Для этого режима в `+experiment=pointflowmatch_step_conditioned_meanflow` включен
@@ -241,7 +284,7 @@ sbatch dexter/run_pointflowmatch_open_fridge_step_conditioned_meanflow.sbatch
 cd ~/point_flow_match/PointFlowMatch
 conda activate ./pfp-train-env
 
-sbatch dexter/run_pointflowmatch_open_fridge_momentum_meanflow.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_momentum_meanflow.sbatch
 ```
 
 Модель: `MomentumMeanFlowPolicy` — first-step loss + corrective second-step loss с
@@ -284,7 +327,7 @@ tail -f logs/pfm_open_fridge_pre_<JOB>.out
 - активирует окружение `./pfp-train-env`,
 - при отсутствии данных вызывает `dexter/download_dataset.sh`,
 - запускает обучение:
-  - `scripts/train.py task_name=open_fridge +experiment=pointflowmatch`,
+  - `scripts/train.py task_name="${TASK_NAME}" +experiment=pointflowmatch`,
 - по окончании копирует чекпоинты из `ckpt/` в
   `${HOME}/checkpoints/pointflowmatch` (можно поменять путь в переменной
   `CKPT_BACKUP_DIR` в начале `.sbatch`).
@@ -311,9 +354,10 @@ pip install -e . --no-deps
 cd ~/point_flow_match/PointFlowMatch
 git pull
 conda activate ./pfp-train-env
-bash dexter/download_dataset.sh                 # baseline: train + valid
+bash dexter/download_dataset.sh                 # open_fridge only (Yandex)
+# другие задачи: tar -xzf demos_<task>_sim.tar.gz
 bash dexter/download_open_fridge_two_phase.sh   # pre + post zarr для двухфазного обучения
-sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge.sbatch
 # двухфазное (pre → post), см. §3 выше:
 # PRE=$(sbatch --parsable dexter/run_open_fridge_pre_grasp.sbatch)
 # sbatch --dependency=afterok:"$PRE" dexter/run_open_fridge_post_grasp.sbatch
@@ -410,7 +454,7 @@ python scripts/validate_accuracy.py policy.ckpt_name=<run_name> env_runner.num_e
   ```bash
   cd ~/point_flow_match/PointFlowMatch
   conda activate ./pfp-train-env
-  sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
+  TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge_gripper_weighted.sbatch
   ```
 
   Этот скрипт запускает:

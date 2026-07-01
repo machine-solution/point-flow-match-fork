@@ -33,10 +33,13 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--task-name",
         "--task",
+        dest="task",
         type=str,
         default="open_fridge",
-        help="RLBench task name (e.g. open_fridge, unplug_charger, close_door, ...).",
+        help="RLBench task_name (paper tasks: unplug_charger, close_door, open_box, open_fridge, "
+        "take_frame_off_hanger, open_oven, put_books_on_bookshelf, take_shoes_out_of_box).",
     )
     parser.add_argument(
         "--experiment",
