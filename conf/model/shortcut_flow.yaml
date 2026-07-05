@@ -18,16 +18,15 @@ obs_encoder: ${backbone}
 
 shortcut:
   embed_dim: 128
-  num_base_steps: 10
+  num_base_steps: 32
   base_loss_weight: 1.0
   consistency_loss_weight: 1.0
+  self_consistency_fraction: 0.5
   stopgrad_target: true
   include_one_step_target: true
   one_step_loss_weight: 1.0
-  step_sampling: powers_of_two
-  min_step: null
-  max_step: 0.5
-  include_half_step: true
+  interpolation_eps: 1.0e-3
+  state_clamp_value: 4.0
 
 diffusion_net:
   _partial_: true
