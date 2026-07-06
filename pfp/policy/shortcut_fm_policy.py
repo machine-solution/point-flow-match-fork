@@ -18,16 +18,15 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ShortcutConfig:
     embed_dim: int = 128
-    num_base_steps: int = 10
+    num_base_steps: int = 32
     base_loss_weight: float = 1.0
     consistency_loss_weight: float = 1.0
+    self_consistency_fraction: float = 0.5
     stopgrad_target: bool = True
-    step_sampling: str = "powers_of_two"
-    min_step: float | None = None
-    max_step: float = 0.5
-    include_half_step: bool = True
     include_one_step_target: bool = True
     one_step_loss_weight: float = 1.0
+    interpolation_eps: float = 1e-3
+    state_clamp_value: float = 4.0
 
 
 class ShortcutFMPolicy(FMPolicy):
@@ -41,19 +40,22 @@ class ShortcutFMPolicy(FMPolicy):
         cfg = shortcut or {}
         self.shortcut_cfg = ShortcutConfig(
             embed_dim=int(cfg.get("embed_dim", 128)),
-            num_base_steps=int(cfg.get("num_base_steps", 10)),
+            num_base_steps=int(cfg.get("num_base_steps", 8)),
             base_loss_weight=float(cfg.get("base_loss_weight", 1.0)),
             consistency_loss_weight=float(cfg.get("consistency_loss_weight", 1.0)),
+            self_consistency_fraction=float(cfg.get("self_consistency_fraction", 0.5)),
             stopgrad_target=bool(cfg.get("stopgrad_target", True)),
-            step_sampling=str(cfg.get("step_sampling", "powers_of_two")),
-            min_step=(None if cfg.get("min_step", None) is None else float(cfg.get("min_step"))),
-            max_step=float(cfg.get("max_step", 0.5)),
-            include_half_step=bool(cfg.get("include_half_step", True)),
             include_one_step_target=bool(cfg.get("include_one_step_target", True)),
             one_step_loss_weight=float(cfg.get("one_step_loss_weight", 1.0)),
+            interpolation_eps=float(cfg.get("interpolation_eps", 1e-3)),
+            state_clamp_value=float(cfg.get("state_clamp_value", 4.0)),
         )
-        if self.shortcut_cfg.num_base_steps <= 0:
-            raise ValueError("shortcut.num_base_steps must be > 0")
+        if self.shortcut_cfg.num_base_steps <= 1:
+            raise ValueError("shortcut.num_base_steps must be > 1")
+        if self.shortcut_cfg.num_base_steps & (self.shortcut_cfg.num_base_steps - 1):
+            raise ValueError("shortcut.num_base_steps must be a power of 2 so d_min=1/num_base_steps is dyadic")
+        if not 0.0 <= self.shortcut_cfg.self_consistency_fraction <= 1.0:
+            raise ValueError("shortcut.self_consistency_fraction must be in [0, 1]")
 
         self.d_embed = nn.Sequential(
             nn.Linear(1, self.shortcut_cfg.embed_dim),
@@ -62,11 +64,12 @@ class ShortcutFMPolicy(FMPolicy):
         )
         logger.info(
             "[ShortcutFlow] embed_dim=%d num_base_steps=%d base_w=%.3f cons_w=%.3f "
-            "one_step_w=%.3f include_one_step=%s stopgrad=%s",
+            "self_consistency_fraction=%.3f one_step_w=%.3f include_one_step=%s stopgrad=%s",
             self.shortcut_cfg.embed_dim,
             self.shortcut_cfg.num_base_steps,
             self.shortcut_cfg.base_loss_weight,
             self.shortcut_cfg.consistency_loss_weight,
+            self.shortcut_cfg.self_consistency_fraction,
             self.shortcut_cfg.one_step_loss_weight,
             self.shortcut_cfg.include_one_step_target,
             self.shortcut_cfg.stopgrad_target,
@@ -75,10 +78,11 @@ class ShortcutFMPolicy(FMPolicy):
             f"[ShortcutFlow] embed_dim={self.shortcut_cfg.embed_dim} "
             f"num_base_steps={self.shortcut_cfg.num_base_steps} "
             f"base_w={self.shortcut_cfg.base_loss_weight} cons_w={self.shortcut_cfg.consistency_loss_weight} "
+            f"self_consistency_fraction={self.shortcut_cfg.self_consistency_fraction} "
             f"one_step_w={self.shortcut_cfg.one_step_loss_weight} "
-            f"include_half_step={self.shortcut_cfg.include_half_step} "
             f"include_one_step_target={self.shortcut_cfg.include_one_step_target} "
-            f"stopgrad_target={self.shortcut_cfg.stopgrad_target}"
+            f"stopgrad_target={self.shortcut_cfg.stopgrad_target} "
+            f"state_clamp_value={self.shortcut_cfg.state_clamp_value}"
         )
 
     def _augment_global_cond_with_d(self, nx: torch.Tensor, d: torch.Tensor) -> torch.Tensor:
@@ -87,43 +91,17 @@ class ShortcutFMPolicy(FMPolicy):
         d_emb = self.d_embed(d_in)
         return torch.cat([nx, d_emb], dim=-1)
 
-    def _sample_shortcut_levels(self, device: torch.device) -> torch.Tensor:
-        if self.shortcut_cfg.step_sampling != "powers_of_two":
-            raise NotImplementedError(
-                f"shortcut.step_sampling={self.shortcut_cfg.step_sampling} is not implemented"
-            )
-        k = float(self.shortcut_cfg.num_base_steps)
-        d = 1.0 / k
-        levels = []
-        max_step = float(self.shortcut_cfg.max_step)
-        min_step = self.shortcut_cfg.min_step
-        while d <= 0.5 + 1e-12:
-            if d <= max_step + 1e-12 and (min_step is None or d >= min_step - 1e-12):
-                levels.append(d)
-            d *= 2.0
-        # Critical: include d=0.5 so consistency directly supervises big_step=1.0.
-        if self.shortcut_cfg.include_half_step:
-            levels.append(0.5)
-        if not levels:
-            base = 1.0 / k
-            levels = [base]
-        eps = 1e-12
-        levels = [x for x in sorted(set(levels)) if x > 0.0 and (2.0 * x <= 1.0 + eps)]
-        if self.shortcut_cfg.include_half_step:
-            has_half = any(abs(x - 0.5) < 1e-6 for x in levels)
-            assert has_half, "include_half_step=true requires d=0.5 in sampled levels"
-        if not levels:
-            raise ValueError("No valid shortcut d levels satisfy constraints after filtering.")
-        logger.info("[ShortcutFlow] sampled shortcut levels=%s", levels)
-        return torch.tensor(levels, device=device, dtype=torch.float32)
+    def _interpolate_shortcut_state(self, z0: torch.Tensor, z1: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        eps = float(self.shortcut_cfg.interpolation_eps)
+        return self._clamp_shortcut_state((1.0 - (1.0 - eps) * t) * z0 + t * z1)
 
-    def sample_shortcut_d_and_t(self, batch_size: int, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-        levels = self._sample_shortcut_levels(device)
-        idx = torch.randint(low=0, high=levels.shape[0], size=(batch_size,), device=device)
-        d = levels[idx].view(batch_size, 1, 1)
-        t_max = torch.clamp(1.0 - 2.0 * d, min=0.0)
-        t = torch.rand((batch_size, 1, 1), device=device) * t_max
-        return d, t
+    def _shortcut_target_velocity(self, z0: torch.Tensor, z1: torch.Tensor) -> torch.Tensor:
+        eps = float(self.shortcut_cfg.interpolation_eps)
+        return z1 - (1.0 - eps) * z0
+
+    def _clamp_shortcut_state(self, x: torch.Tensor) -> torch.Tensor:
+        c = float(self.shortcut_cfg.state_clamp_value)
+        return torch.clamp(x, min=-c, max=c)
 
     def _forward_shortcut(
         self,
@@ -178,64 +156,123 @@ class ShortcutFMPolicy(FMPolicy):
             phase = self._assert_valid_phase(phase, b, t_h)
             phase_flow = phase
 
-        z0 = self._init_noise(b)
-        z1 = ny
+        d_min_value = 1.0 / float(self.shortcut_cfg.num_base_steps)
+        assert self.shortcut_cfg.num_base_steps > 0
+        assert self.shortcut_cfg.num_base_steps & (self.shortcut_cfg.num_base_steps - 1) == 0, (
+            "shortcut d_min must be a power-of-two reciprocal"
+        )
 
-        # Base shortcut loss with smallest step d_min.
-        t_base = torch.rand((b, 1, 1), device=DEVICE)
-        x_t = (1.0 - t_base) * z0 + t_base * z1
-        v_target = z1 - z0
-        d_min = torch.full((b, 1, 1), 1.0 / float(self.shortcut_cfg.num_base_steps), device=DEVICE)
-        v_pred = self._forward_shortcut(x_t, t_base, d_min, nx, phase_flow=phase_flow)
-        per_xyz, per_rot6d, per_grip = self._per_timestep_loss(v_pred, v_target)
-        weights = self._compute_gripper_weights(ny)
-        loss_base_xyz = (per_xyz * weights).mean()
-        loss_base_rot6d = (per_rot6d * weights).mean()
-        loss_base_grip = (per_grip * weights).mean()
+        n_sc = int(round(b * float(self.shortcut_cfg.self_consistency_fraction)))
+        n_sc = max(0, min(b, n_sc))
+        if 0.0 < self.shortcut_cfg.self_consistency_fraction < 1.0 and b > 1:
+            n_sc = max(1, min(b - 1, n_sc))
+        n_base = b - n_sc
 
-        # Self-consistency: one big step ~= two small steps.
-        d_sc, t_sc = self.sample_shortcut_d_and_t(b, DEVICE)
-        x_sc = (1.0 - t_sc) * z0 + t_sc * z1
-        v_big = self._forward_shortcut(x_sc, t_sc, 2.0 * d_sc, nx, phase_flow=phase_flow)
-        x_big = x_sc + 2.0 * d_sc * v_big
-
-        v1 = self._forward_shortcut(x_sc, t_sc, d_sc, nx, phase_flow=phase_flow)
-        x_mid = x_sc + d_sc * v1
-        v2 = self._forward_shortcut(x_mid, t_sc + d_sc, d_sc, nx, phase_flow=phase_flow)
-        x_two = x_mid + d_sc * v2
-
-        x_two_target = x_two.detach() if self.shortcut_cfg.stopgrad_target else x_two
-        loss_sc = F.mse_loss(x_big, x_two_target)
+        zero = ny.sum() * 0.0
+        loss_base_xyz = zero
+        loss_base_rot6d = zero
+        loss_base_grip = zero
+        loss_sc = zero
+        loss_one_step = zero
         one_step_anchor_t_mean = 0.0
-        loss_one_step = torch.zeros((), device=DEVICE, dtype=x_big.dtype)
-        if self.shortcut_cfg.include_one_step_target:
-            # One-step consistency is anchored on interpolation states, not only pure noise.
-            # t_anchor is sampled in [0, 0.5] so (t_anchor + 0.5) stays in [0, 1].
-            t_anchor = torch.rand((b, 1, 1), device=DEVICE) * 0.5
-            x_anchor = (1.0 - t_anchor) * z0 + t_anchor * z1
-            d_full = torch.ones((b, 1, 1), device=DEVICE)
-            v_full = self._forward_shortcut(x_anchor, t_anchor, d_full, nx, phase_flow=phase_flow)
-            x_full = x_anchor + d_full * v_full
 
-            d_half = torch.full((b, 1, 1), 0.5, device=DEVICE)
-            v_h1 = self._forward_shortcut(x_anchor, t_anchor, d_half, nx, phase_flow=phase_flow)
-            x_half = x_anchor + d_half * v_h1
-            t_half1 = t_anchor + 0.5
-            v_h2 = self._forward_shortcut(x_half, t_half1, d_half, nx, phase_flow=phase_flow)
-            x_half_half = x_half + d_half * v_h2
-            x_half_half_target = x_half_half.detach() if self.shortcut_cfg.stopgrad_target else x_half_half
-            loss_one_step = F.mse_loss(x_full, x_half_half_target)
-            one_step_anchor_t_mean = float(t_anchor.mean().item())
+        d_sc = torch.empty((0, 1, 1), device=DEVICE, dtype=ny.dtype)
+        t_sc = torch.empty((0, 1, 1), device=DEVICE, dtype=ny.dtype)
 
-        contains_half = bool(torch.any(torch.isclose(d_sc.view(-1), torch.tensor(0.5, device=DEVICE))).item())
+        if n_base > 0:
+            nx_base = nx[:n_base]
+            ny_base = ny[:n_base]
+            phase_base = phase_flow[:n_base] if phase_flow is not None else None
+            z0_base = self._init_noise(n_base)
+            z1_base = ny_base
+
+            t_base_idx = torch.randint(
+                low=0,
+                high=int(self.shortcut_cfg.num_base_steps),
+                size=(n_base, 1, 1),
+                device=DEVICE,
+            )
+            t_base = t_base_idx.to(dtype=ny.dtype) * d_min_value
+            d_base = torch.full((n_base, 1, 1), d_min_value, device=DEVICE, dtype=ny.dtype)
+            x_t = self._interpolate_shortcut_state(z0_base, z1_base, t_base)
+            v_target = self._shortcut_target_velocity(z0_base, z1_base)
+            v_pred = self._forward_shortcut(x_t, t_base, d_base, nx_base, phase_flow=phase_base)
+            per_xyz, per_rot6d, per_grip = self._per_timestep_loss(v_pred, v_target)
+            weights = self._compute_gripper_weights(ny_base)
+            loss_base_xyz = (per_xyz * weights).mean()
+            loss_base_rot6d = (per_rot6d * weights).mean()
+            loss_base_grip = (per_grip * weights).mean()
+
+        if n_sc > 0:
+            nx_sc = nx[n_base:]
+            ny_sc = ny[n_base:]
+            phase_sc = phase_flow[n_base:] if phase_flow is not None else None
+            z0_sc = self._init_noise(n_sc)
+            z1_sc = ny_sc
+
+            d_levels = []
+            d_level = d_min_value
+            while d_level <= 0.5 + 1e-12:
+                d_levels.append(d_level)
+                d_level *= 2.0
+            levels = torch.tensor(d_levels, device=DEVICE, dtype=ny.dtype)
+            d_weights = 1.0 / levels
+            d_idx = torch.multinomial(d_weights, num_samples=n_sc, replacement=True)
+            d_sc = levels[d_idx].view(n_sc, 1, 1)
+
+            # For each d, sample t uniformly from the grid 0, 2d, 4d, ..., 1 - 2d.
+            num_t_values = torch.round(1.0 / (2.0 * d_sc)).to(dtype=torch.long).view(n_sc)
+            rand_unit = torch.rand((n_sc,), device=DEVICE)
+            t_idx = torch.floor(rand_unit * num_t_values.to(dtype=ny.dtype)).to(dtype=ny.dtype).view(n_sc, 1, 1)
+            t_sc = 2.0 * d_sc * t_idx
+
+            x_sc = self._interpolate_shortcut_state(z0_sc, z1_sc, t_sc)
+            v_big = self._forward_shortcut(x_sc, t_sc, 2.0 * d_sc, nx_sc, phase_flow=phase_sc)
+            x_big = self._clamp_shortcut_state(x_sc + 2.0 * d_sc * v_big)
+
+            v1 = self._forward_shortcut(x_sc, t_sc, d_sc, nx_sc, phase_flow=phase_sc)
+            x_mid = self._clamp_shortcut_state(x_sc + d_sc * v1)
+            v2 = self._forward_shortcut(x_mid, t_sc + d_sc, d_sc, nx_sc, phase_flow=phase_sc)
+            x_two = self._clamp_shortcut_state(x_mid + d_sc * v2)
+
+            x_two_target = x_two.detach() if self.shortcut_cfg.stopgrad_target else x_two
+            loss_sc = F.mse_loss(x_big, x_two_target)
+
+            if self.shortcut_cfg.include_one_step_target:
+                # d=0.5 has a single valid shortcut grid anchor t=0 for the two half-steps.
+                t_anchor = torch.zeros((n_sc, 1, 1), device=DEVICE, dtype=ny.dtype)
+                x_anchor = self._interpolate_shortcut_state(z0_sc, z1_sc, t_anchor)
+                d_full = torch.ones((n_sc, 1, 1), device=DEVICE, dtype=ny.dtype)
+                v_full = self._forward_shortcut(x_anchor, t_anchor, d_full, nx_sc, phase_flow=phase_sc)
+                x_full = self._clamp_shortcut_state(x_anchor + d_full * v_full)
+
+                d_half = torch.full((n_sc, 1, 1), 0.5, device=DEVICE, dtype=ny.dtype)
+                v_h1 = self._forward_shortcut(x_anchor, t_anchor, d_half, nx_sc, phase_flow=phase_sc)
+                x_half = self._clamp_shortcut_state(x_anchor + d_half * v_h1)
+                t_half1 = t_anchor + 0.5
+                v_h2 = self._forward_shortcut(x_half, t_half1, d_half, nx_sc, phase_flow=phase_sc)
+                x_half_half = self._clamp_shortcut_state(x_half + d_half * v_h2)
+                x_half_half_target = x_half_half.detach() if self.shortcut_cfg.stopgrad_target else x_half_half
+                loss_one_step = F.mse_loss(x_full, x_half_half_target)
+                one_step_anchor_t_mean = float(t_anchor.mean().item())
+
+        contains_half = bool(
+            d_sc.numel() > 0 and torch.any(torch.isclose(d_sc.view(-1), torch.tensor(0.5, device=DEVICE))).item()
+        )
         stats = {
-            "shortcut/d_mean": float(d_sc.mean().item()),
-            "shortcut/t_mean": float(t_sc.mean().item()),
-            "shortcut/max_sampled_d": float(d_sc.max().item()),
+            "shortcut/base_batch_size": float(n_base),
+            "shortcut/self_consistency_batch_size": float(n_sc),
+            "shortcut/self_consistency_fraction": float(self.shortcut_cfg.self_consistency_fraction),
+            "shortcut/d_mean": float(d_sc.mean().item()) if d_sc.numel() > 0 else 0.0,
+            "shortcut/t_mean": float(t_sc.mean().item()) if t_sc.numel() > 0 else 0.0,
+            "shortcut/max_sampled_d": float(d_sc.max().item()) if d_sc.numel() > 0 else 0.0,
             "shortcut/contains_half_step": 1.0 if contains_half else 0.0,
             "shortcut/include_one_step_target": 1.0 if self.shortcut_cfg.include_one_step_target else 0.0,
             "shortcut/one_step_anchor_t_mean": one_step_anchor_t_mean,
             "shortcut/num_base_steps": float(self.shortcut_cfg.num_base_steps),
+            "shortcut/d_min": float(d_min_value),
+            "shortcut/state_clamp_value": float(self.shortcut_cfg.state_clamp_value),
+            "shortcut/interpolation_eps": float(self.shortcut_cfg.interpolation_eps),
         }
         return loss_base_xyz, loss_base_rot6d, loss_base_grip, loss_sc, loss_one_step, stats
 
