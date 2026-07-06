@@ -6,6 +6,7 @@ set -euo pipefail
 #   bash bash/dexter_train_meanflow.sh
 #   bash bash/dexter_train_meanflow.sh open_fridge
 #   TASK_NAME=open_box RUN_NAME=my_meanflow_run bash bash/dexter_train_meanflow.sh
+#   RUN_LOCAL=1 TASK_NAME=open_fridge bash bash/dexter_train_meanflow.sh
 
 TASK_NAME="${1:-${TASK_NAME:-open_fridge}}"
 if [[ $# -gt 0 ]]; then shift; fi
@@ -62,6 +63,11 @@ EOF
 if [ "${DRY_RUN}" = "1" ]; then
   echo "DRY_RUN=1; generated ${SBATCH_FILE}"
   exit 0
+fi
+
+if [[ "${RUN_LOCAL:-0}" == "1" ]]; then
+  export TASK_NAME
+  exec bash "${REPO_ROOT}/dexter/run_local.sh" "${REPO_ROOT}/dexter/run_pointflowmatch_open_fridge_meanflow.sbatch"
 fi
 
 sbatch "${SBATCH_FILE}"

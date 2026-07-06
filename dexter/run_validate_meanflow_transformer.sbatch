@@ -31,20 +31,13 @@ fi
 
 NUM_EPISODES="${NUM_EPISODES:-100}"
 
-cd "${SLURM_SUBMIT_DIR}"
-mkdir -p logs
-
-echo "=== Validation job info ==="
-echo "Working dir : $(pwd)"
-echo "Job ID      : ${SLURM_JOB_ID}"
-echo "Node        : $(hostname)"
-echo "CKPT_NAME   : ${CKPT_NAME}"
-echo "Episodes    : ${NUM_EPISODES}"
+# shellcheck source=dexter/_run_env.sh
+source dexter/_run_env.sh
 
 source /opt/miniconda3/etc/profile.d/conda.sh
 conda activate ./pfp-train-env
 echo "Python: $(which python) ($(python -V 2>&1))"
 
-export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
+export PYTHONPATH="${REPO_ROOT}/../diffusion_policy:${PYTHONPATH:-}"
 
 bash bash/run_validate_accuracy.sh "${CKPT_NAME}" "${NUM_EPISODES}"

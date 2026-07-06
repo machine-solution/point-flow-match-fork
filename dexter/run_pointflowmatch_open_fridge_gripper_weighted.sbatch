@@ -21,14 +21,8 @@ set -e
 
 CKPT_BACKUP_DIR="${HOME}/checkpoints/pointflowmatch_gripw"
 
-cd "${SLURM_SUBMIT_DIR}"
-mkdir -p logs
-
-echo "=== Job info ==="
-echo "Working dir : $(pwd)"
-echo "Job ID      : ${SLURM_JOB_ID}"
-echo "Node        : $(hostname)"
-echo "GPUs        : ${SLURM_GPUS:-1}"
+# shellcheck source=dexter/_run_env.sh
+source dexter/_run_env.sh
 
 source /opt/miniconda3/etc/profile.d/conda.sh
 conda activate ./pfp-train-env
@@ -42,8 +36,6 @@ nvidia-smi
 TASK_NAME="${TASK_NAME:-open_fridge}"
 # shellcheck source=dexter/_sbatch_task_preamble.sh
 source dexter/_sbatch_task_preamble.sh
-
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
 echo "=== Disk space before training ==="
 df -h . /tmp 2>/dev/null || df -h .

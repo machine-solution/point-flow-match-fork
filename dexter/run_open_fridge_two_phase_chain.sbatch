@@ -5,6 +5,7 @@
 # два отдельных sbatch + submit_open_fridge_post_after_pre.sh
 #
 #   sbatch dexter/run_open_fridge_two_phase_chain.sbatch
+#   bash dexter/run_local.sh dexter/run_open_fridge_two_phase_chain.sbatch
 #
 #SBATCH --job-name=pfm_of_chain
 #SBATCH --output=logs/pfm_open_fridge_chain_%j.out
@@ -20,20 +21,12 @@ set -euo pipefail
 
 CKPT_BACKUP_DIR="${CKPT_BACKUP_DIR:-${HOME}/checkpoints/pointflowmatch_open_fridge_two_phase}"
 
-cd "${SLURM_SUBMIT_DIR}"
-mkdir -p logs
+# shellcheck source=dexter/_run_env.sh
+source dexter/_run_env.sh
+echo "=== Chain job ${PFP_JOB_ID} on $(hostname) ==="
 
-source /opt/miniconda3/etc/profile.d/conda.sh
-conda activate ./pfp-train-env
-export CUDA_LAUNCH_BLOCKING=1
-export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
-
-echo "=== Chain job ${SLURM_JOB_ID} on $(hostname) ==="
-nvidia-smi || true
-
-PFP_PRE="${PFP_TRAIN_PRE:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_pre_grasp_stable3}"
-PFP_POST="${PFP_TRAIN_POST:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_post_grasp_stable3}"
+PFP_PRE="${PFP_TRAIN_PRE:-${REPO_ROOT}/demos/sim/open_fridge/train_pre_grasp_stable3}"
+PFP_POST="${PFP_TRAIN_POST:-${REPO_ROOT}/demos/sim/open_fridge/train_post_grasp_stable3}"
 
 if [[ ! -d "${PFP_PRE}/data" ]] || [[ ! -d "${PFP_POST}/data" ]]; then
   echo "=== Downloading datasets ==="
@@ -46,7 +39,7 @@ fi
 
 df -h . || true
 
-PRE_JOB="${SLURM_JOB_ID}"
+PRE_JOB="${PFP_JOB_ID}"
 RUN_PRE="open_fridge_pre_${PRE_JOB}_chain"
 echo "=== [1/2] Pre-grasp run_name=${RUN_PRE} ==="
 python scripts/train.py \

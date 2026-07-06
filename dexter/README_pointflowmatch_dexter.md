@@ -24,21 +24,65 @@
 **Пример (холодильник — скопировать как есть):**
 
 ```bash
+# Slurm (когда снова включат):
 TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+
+# Прямой запуск на сервере (сейчас):
+TASK_NAME=open_fridge bash dexter/run_local.sh dexter/run_pointflowmatch_open_fridge.sbatch
 ```
 
 **Другая задача:** замени только `TASK_NAME`, sbatch-файл тот же:
 
 ```bash
-TASK_NAME=open_box sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+TASK_NAME=open_box bash dexter/run_local.sh dexter/run_pointflowmatch_open_fridge.sbatch
 ```
 
-Локально (без Slurm):
+Локально на своей машине (без Dexter):
 
 ```bash
 python dexter/train_pointflowmatch_open_fridge.py --task-name open_fridge
 python scripts/train.py task_name=open_fridge +experiment=pointflowmatch launch_eval_after_train=false
 ```
+
+#### 0. SSH-доступ на сервер
+
+Админ просит **Ed25519-ключ с passphrase**. На своей машине (один раз):
+
+```bash
+bash dexter/setup_ssh_access.sh
+# или с email в комментарии ключа:
+bash dexter/setup_ssh_access.sh --email you@example.com
+```
+
+Скрипт создаст `~/.ssh/dexter_ed25519` и выведет **публичный** ключ — его текст нужно отправить админу в ответ на письмо. Приватный ключ (`dexter_ed25519` без `.pub`) никому не передавать.
+
+После добавления ключа на сервере:
+
+```bash
+ssh -i ~/.ssh/dexter_ed25519 <user>@<dexter-host>
+```
+
+#### 0.1 Лимиты при прямом запуске (без Slurm)
+
+Сейчас задания запускаются **напрямую**, не через Slurm. На одну задачу:
+
+| Ресурс | Лимит |
+|--------|-------|
+| GPU | ≤ 2 |
+| CPU | ≤ 16 ядер |
+| RAM | ≤ 64 GB |
+
+Скрипт `dexter/_run_env.sh` (подключается из всех `dexter/run_*.sbatch`) автоматически выставляет `OMP_NUM_THREADS` и проверяет `CUDA_VISIBLE_DEVICES`. Пример с одной GPU:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 TASK_NAME=open_fridge bash dexter/run_local.sh dexter/run_pointflowmatch_open_fridge_meanflow.sbatch
+```
+
+Долгие задачи — в `tmux` или через `nohup`; `run_local.sh` пишет лог в `logs/local_<script>_<timestamp>.log`.
+
+Если не хватает RAM при `dataloader.batch_size=128`, уменьши batch в sbatch или добавь override: `dataloader.batch_size=64`.
+
+Когда Slurm вернётся — те же sbatch-файлы работают как раньше: `sbatch dexter/run_....sbatch` (заголовки `#SBATCH` и лимиты кластера не трогали).
 
 #### 0. Подготовка директории и репозиториев
 
@@ -188,13 +232,25 @@ bash dexter/download_open_fridge_two_phase.sh --stable3
 
 Ссылки на публичные шары (те же, что вшиты в скрипты): [полный сим-набор](https://disk.yandex.ru/d/Ssr_BffZItISOg), [pre](https://disk.yandex.ru/d/E81_4UbQiwAYpw), [post](https://disk.yandex.ru/d/OmzMhzSy0lGTMw).
 
-#### 3. Запуск обучения через Slurm
+#### 3. Запуск обучения
 
-Из корня `PointFlowMatch`. В sbatch-скрипте уже прописан `PYTHONPATH` на соседний `diffusion_policy`, при ручном запуске его нужно выставить самому (см. проверку выше).
+**Сейчас (прямой запуск на сервере):** из корня `PointFlowMatch`, окружение активировано (`conda activate ./pfp-train-env`):
 
-На Dexter в sbatch используется системный conda: `source /opt/miniconda3/etc/profile.d/conda.sh` (как в примере из инструкции кластера).
+```bash
+cd ~/point_flow_match/PointFlowMatch
+conda activate ./pfp-train-env
+CUDA_VISIBLE_DEVICES=0 TASK_NAME=open_fridge bash dexter/run_local.sh dexter/run_pointflowmatch_open_fridge.sbatch
+```
 
-**Базовая модель:**
+**Когда снова включат Slurm** — те же скрипты через `sbatch`:
+
+```bash
+TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+```
+
+В sbatch уже прописан `PYTHONPATH` на соседний `diffusion_policy` (через `dexter/_run_env.sh`); при ручном `python scripts/train.py` его нужно выставить самому (см. проверку выше).
+
+**Базовая модель (Slurm):**
 
 ```bash
 cd ~/point_flow_match/PointFlowMatch

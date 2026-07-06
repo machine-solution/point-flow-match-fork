@@ -27,14 +27,8 @@ set -e
 
 CKPT_BACKUP_DIR="${HOME}/checkpoints/pointflowmatch_momentum_meanflow"
 
-cd "${SLURM_SUBMIT_DIR}"
-mkdir -p logs
-
-echo "=== Job info ==="
-echo "Working dir : $(pwd)"
-echo "Job ID      : ${SLURM_JOB_ID}"
-echo "Node        : $(hostname)"
-echo "GPUs        : ${SLURM_GPUS:-1}"
+# shellcheck source=dexter/_run_env.sh
+source dexter/_run_env.sh
 
 source /opt/miniconda3/etc/profile.d/conda.sh
 conda activate ./pfp-train-env
@@ -49,7 +43,6 @@ TASK_NAME="${TASK_NAME:-open_fridge}"
 source dexter/_sbatch_task_preamble.sh
 
 
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 echo "=== Disk space before training ==="
 df -h . /tmp 2>/dev/null || df -h .
 
@@ -64,7 +57,7 @@ python scripts/train.py \
     dataloader.batch_size=128 \
     launch_eval_after_train=false \
     log_wandb=False \
-    run_name="momentum_meanflow_${TASK_NAME}_${SLURM_JOB_ID}"
+    run_name="momentum_meanflow_${TASK_NAME}_${PFP_JOB_ID}"
 
 echo "=== Training finished ==="
 

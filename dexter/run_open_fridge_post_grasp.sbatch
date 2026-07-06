@@ -25,24 +25,20 @@ set -euo pipefail
 
 CKPT_BACKUP_DIR="${CKPT_BACKUP_DIR:-${HOME}/checkpoints/pointflowmatch_open_fridge_two_phase}"
 
-cd "${SLURM_SUBMIT_DIR}"
-mkdir -p logs
-
-echo "=== Job info (post-grasp) ==="
-echo "Working dir : $(pwd)"
-echo "Job ID      : ${SLURM_JOB_ID}"
+# shellcheck source=dexter/_run_env.sh
+source dexter/_run_env.sh
 
 source /opt/miniconda3/etc/profile.d/conda.sh
 conda activate ./pfp-train-env
 echo "Python: $(which python) ($(python -V 2>&1))"
 
 export CUDA_LAUNCH_BLOCKING=1
-export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
+export PYTHONPATH="${REPO_ROOT}/../diffusion_policy:${PYTHONPATH:-}"
 
 echo "=== nvidia-smi ==="
 nvidia-smi || true
 
-PFP_TRAIN_POST="${PFP_TRAIN_POST:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_post_grasp_stable3}"
+PFP_TRAIN_POST="${PFP_TRAIN_POST:-${REPO_ROOT}/demos/sim/open_fridge/train_post_grasp_stable3}"
 POST_DATA="${PFP_TRAIN_POST}/data"
 
 if [[ ! -d "${POST_DATA}" ]]; then
@@ -57,8 +53,7 @@ if [[ ! -d "${POST_DATA}" ]]; then
   exit 1
 fi
 
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
-RUN_NAME="open_fridge_post_${SLURM_JOB_ID}"
+RUN_NAME="open_fridge_post_${PFP_JOB_ID}"
 
 echo "=== Disk space ==="
 df -h . /tmp 2>/dev/null || df -h .

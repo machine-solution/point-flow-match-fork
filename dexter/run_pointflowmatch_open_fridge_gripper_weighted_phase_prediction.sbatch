@@ -20,18 +20,12 @@ set -e
 
 CKPT_BACKUP_DIR="${HOME}/checkpoints/pointflowmatch_gripw_phase_prediction"
 
-cd "${SLURM_SUBMIT_DIR}"
-mkdir -p logs
-
-source /opt/miniconda3/etc/profile.d/conda.sh
-conda activate ./pfp-train-env
-export CUDA_LAUNCH_BLOCKING=1
+# shellcheck source=dexter/_run_env.sh
+source dexter/_run_env.sh
 TASK_NAME="${TASK_NAME:-open_fridge}"
 # shellcheck source=dexter/_sbatch_task_preamble.sh
 source dexter/_sbatch_task_preamble.sh
 
-
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
 python dexter/verify_training_setup.py \
     --overrides \

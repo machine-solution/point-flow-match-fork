@@ -27,13 +27,8 @@
 #
 set -euo pipefail
 
-cd "${SLURM_SUBMIT_DIR}"
-mkdir -p logs
-
-echo "=== Job info (post finetune) ==="
-echo "Working dir : $(pwd)"
-echo "Job ID      : ${SLURM_JOB_ID}"
-echo "Node        : $(hostname)"
+# shellcheck source=dexter/_run_env.sh
+source dexter/_run_env.sh
 
 # Pick python
 PYTHON_BIN=""
@@ -52,11 +47,11 @@ echo "Python: ${PYTHON_BIN} ($(${PYTHON_BIN} -V 2>&1))"
 export CUDA_LAUNCH_BLOCKING=1
 
 # Ensure sibling diffusion_policy is importable (common on clusters)
-export PYTHONPATH="${SLURM_SUBMIT_DIR}/../diffusion_policy:${PYTHONPATH:-}"
+export PYTHONPATH="${REPO_ROOT}/../diffusion_policy:${PYTHONPATH:-}"
 
 # Inputs
 CKPT_SRC="${CKPT_SRC:?Set CKPT_SRC=/abs/path/to/ep1100-....pt}"
-PFP_TRAIN_POST="${PFP_TRAIN_POST:-${SLURM_SUBMIT_DIR}/demos/sim/open_fridge/train_post_grasp_stable3}"
+PFP_TRAIN_POST="${PFP_TRAIN_POST:-${REPO_ROOT}/demos/sim/open_fridge/train_post_grasp_stable3}"
 
 if [[ ! -f "${CKPT_SRC}" ]]; then
   echo "ERROR: CKPT_SRC not found: ${CKPT_SRC}" >&2
@@ -74,7 +69,7 @@ mkdir -p "ckpt/${RESUME_NAME}"
 cp -f "${CKPT_SRC}" "ckpt/${RESUME_NAME}/"
 echo "Copied ckpt -> ckpt/${RESUME_NAME}/$(basename "${CKPT_SRC}")"
 
-RUN_NAME="${RUN_NAME:-open_fridge_post_953_finetune_${SLURM_JOB_ID}}"
+RUN_NAME="${RUN_NAME:-open_fridge_post_953_finetune_${PFP_JOB_ID}}"
 
 echo "=== Disk space ==="
 df -h . /tmp 2>/dev/null || df -h .

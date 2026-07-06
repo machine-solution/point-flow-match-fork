@@ -4,7 +4,7 @@
 #
 # Usage (from repo root):
 #   TASK_NAME=open_fridge sbatch dexter/run_pointflowmatch_open_fridge.sbatch
-#   TASK_NAME=open_box sbatch dexter/run_pointflowmatch_open_fridge.sbatch
+#   TASK_NAME=open_box bash dexter/run_local.sh dexter/run_pointflowmatch_open_fridge.sbatch
 #
 # Prerequisites (run once on Dexter from the repo root):
 #   1. Clone the repo (and sibling diffusion_policy repo next to it).
@@ -37,36 +37,14 @@ CKPT_BACKUP_DIR="${HOME}/checkpoints/pointflowmatch"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-cd "${SLURM_SUBMIT_DIR}"
-mkdir -p logs
-
-echo "=== Job info ==="
-echo "Working dir : $(pwd)"
-echo "Job ID      : ${SLURM_JOB_ID}"
-echo "Node        : $(hostname)"
-echo "GPUs        : ${SLURM_GPUS:-1}"
-
-# Conda на Dexter: системный путь (как в инструкции кластера)
-source /opt/miniconda3/etc/profile.d/conda.sh
-conda activate ./pfp-train-env
-echo "Python: $(which python) ($(python -V 2>&1))"
-
-# Чтобы OOM показывал точную строку, а не асинхронный след
-export CUDA_LAUNCH_BLOCKING=1
-
-# Что видит процесс по GPU (при MIG/доле — лимит может быть меньше полной карты)
-echo "=== nvidia-smi (before training) ==="
-nvidia-smi
+# shellcheck source=dexter/_run_env.sh
+source dexter/_run_env.sh
 
 TASK_NAME="${TASK_NAME:-open_fridge}"
 # shellcheck source=dexter/_sbatch_task_preamble.sh
 source dexter/_sbatch_task_preamble.sh
 
 # ── Training ─────────────────────────────────────────────────────────────────
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
-
-echo "=== Disk space before training ==="
-df -h . /tmp 2>/dev/null || df -h .
 echo "=== Starting training (baseline, milestone checkpoints) ==="
 # Checkpoints at epochs 300,600,900,1200,1500 only (see conf/checkpoint_schedule/milestones_1500.yaml).
 PFP_PHASE_CONDITIONING="${PFP_PHASE_CONDITIONING:-disabled}"

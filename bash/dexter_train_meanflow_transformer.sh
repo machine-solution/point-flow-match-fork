@@ -64,5 +64,10 @@ if [ "${DRY_RUN}" = "1" ]; then
   exit 0
 fi
 
+if [[ "${RUN_LOCAL:-0}" == "1" ]]; then
+  export TASK_NAME
+  exec bash "${REPO_ROOT}/dexter/run_local.sh" "${REPO_ROOT}/dexter/run_pointflowmatch_open_fridge_meanflow_transformer.sbatch"
+fi
+
 sbatch "${SBATCH_FILE}"
 echo "Submitted ${SBATCH_FILE}"
